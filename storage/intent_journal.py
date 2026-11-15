@@ -125,10 +125,12 @@ class IntentJournal:
 
     def begin(
         self, *, signal_id: str, attempt_id: str,
-        request: dict, risk_pct: str, margin_home: str
+        request: dict, risk_pct: str, margin_home: str, grade=None
     ) -> dict:
         _identity(signal_id, "signal ID")
         _identity(attempt_id, "attempt ID")
+        if grade is not None and grade not in ("A", "B"):
+            raise JournalError("Invalid trade grade")
         if not isinstance(request, dict) or "order" not in request:
             raise JournalError("Missing order request")
         digest = hashlib.sha256(
@@ -149,7 +151,7 @@ class IntentJournal:
                 "signal_id": signal_id, "attempt_id": attempt_id,
                 "request_hash": digest, "request": request,
                 "status": "PREPARED", "risk_pct": str(risk_pct),
-                "margin_home": str(margin_home),
+                "margin_home": str(margin_home), "grade": grade,
                 "created_at": now, "updated_at": now,
                 "request_id": None, "order_id": None, "trade_id": None,
                 "protection_verified": False,

@@ -1,17 +1,24 @@
-"""Category-4 placeholder.
+"""Category-4 partial-close compatibility interface.
 
-The original partial-close algorithm used absolute price movement as positive
-R and could close SHORT trades incorrectly. It is not safe to retain it as
-unreachable executable code while building the foundation.
+The legacy method remains fail-closed. Pure plans use TradeRecord and
+TradeManagement, and can be staged durably but never auto-submitted to OANDA.
 """
 from __future__ import annotations
 
 
 class PartialCloseEngine:
-    """Compatibility interface; never mutates broker state in Category 1."""
-
     def __init__(self, executor):
         self.executor = executor
 
+    def preview(self, record, rules, *, bid, ask, phase="phase1",
+                trigger_r=1, fraction=0.5):
+        """Return positive partial-close units, or None if not due/unsafe."""
+        return record.partial_close_units(
+            rules, bid=bid, ask=ask, phase=phase,
+            trigger_r=trigger_r, fraction=fraction
+        )
+
     def check_and_execute(self):
-        raise RuntimeError("Partial-close and break-even require Category 4 reconciliation")
+        raise RuntimeError(
+            "Real partial close is disabled; Category 4 only stages and verifies intents"
+        )
