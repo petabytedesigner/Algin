@@ -1,6 +1,7 @@
-"""Algin original configuration; Category 1 executes in observation-only mode.
+"""Algin runtime policy — Category-3 read-only development baseline.
 
-Numerical strategy/risk values deliberately retained pending Category 2.
+Risk settings are explicitly defined by Category 2. Broker mutation remains
+disabled in configuration and by an independent Category-3 release gate.
 """
 from __future__ import annotations
 import os
@@ -36,7 +37,9 @@ NEWS_LOCKOUT_MINUTES_BEFORE = 30
 NEWS_LOCKOUT_MINUTES_AFTER = 30
 ENABLE_SESSIONS = True
 MIN_DISTANCE_PIPS = 3
+# Read-only preflight; limit from verified historical FX spread scans.
 SLIPPAGE_ALLOWED = 2
+MAX_SPREAD_PIPS = 2.5
 
 CSV_ENABLED = True
 CSV_PATH = "csv"

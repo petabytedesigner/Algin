@@ -46,7 +46,16 @@ class DataHandler:
             log(f"⚠️ DataHandler: pricing fail {instrument}")
             return None
         try:
-            d=r.json()["prices"][0]
+            prices = r.json()["prices"]
+            matches = [p for p in prices if p.get("instrument") == instrument]
+            if len(matches) != 1:
+                return None
+            d = matches[0]
+            if not (
+                (d.get("status") == "tradeable" and d.get("tradeable", True) is not False)
+                if "status" in d else d.get("tradeable") is True
+            ):
+                return None
             return {
                 "bid":float(d["bids"][0]["price"]),
                 "ask":float(d["asks"][0]["price"]),

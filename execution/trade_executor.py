@@ -1,7 +1,8 @@
-"""Read-only OANDA Practice boundary for Category 1.
+"""Legacy-compatible read-only OANDA Practice executor.
 
-The public mutation method signatures are retained for later categories,
-but no order / dependent order / trade close implementation lives here.
+Category 3 adds a separate, durable order boundary in broker/order_engine.py.
+This interface retains existing signatures but does not send orders, modify
+protection or close trades.
 """
 from __future__ import annotations
 
@@ -106,7 +107,12 @@ class TradeExecutor:
                 p for p in prices
                 if isinstance(p, dict) and p.get("instrument") == instrument
             ]
-            if len(matches) != 1 or matches[0].get("tradeable") is not True:
+            if len(matches) != 1 or not (
+                (matches[0].get("status") == "tradeable"
+                 and matches[0].get("tradeable", True) is not False)
+                if "status" in matches[0]
+                else matches[0].get("tradeable") is True
+            ):
                 raise ValueError("Untradeable, missing or duplicated quote")
             bid = float(matches[0]["bids"][0]["price"])
             ask = float(matches[0]["asks"][0]["price"])

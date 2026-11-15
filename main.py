@@ -1,4 +1,4 @@
-"""Category-2 read-only entrypoint; broker mutations are not implemented here.
+"""Category-3 read-only entrypoint; broker mutations are not implemented here.
 
 Strategy and risk output is advisory. No order submission, SL/TP changes or
 partial close can be requested until later categories are verified.
@@ -145,16 +145,16 @@ def scan_once() -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Algin Category 2 read-only baseline")
+    parser = argparse.ArgumentParser(description="Algin Category 3 read-only baseline")
     parser.add_argument("--check", action="store_true", help="Verify imports without network")
     parser.add_argument("--once", action="store_true", help="One read-only scan")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if config.ORDER_WRITES_ENABLED:
-        LOG.error("Category-1 build rejects any order-enabled configuration")
+        LOG.error("Category-3 build rejects any order-enabled configuration")
         return 3
     if args.check:
-        LOG.info("Category-2 imports OK; broker writes DISABLED")
+        LOG.info("Category-3 imports OK; broker writes DISABLED")
         return 0
     if args.once:
         return scan_once()
