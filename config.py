@@ -1,6 +1,7 @@
-"""Algin original configuration; Category 1 executes in observation-only mode.
+"""Algin runtime policy — Category-3 read-only development baseline.
 
-Numerical strategy/risk values deliberately retained pending Category 2.
+Risk settings are explicitly defined by Category 2. Broker mutation remains
+disabled in configuration and by an independent Category-3 release gate.
 """
 from __future__ import annotations
 import os

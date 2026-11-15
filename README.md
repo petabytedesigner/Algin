@@ -1,4 +1,4 @@
-# Algin — development baseline: Categories 1 and 2
+# Algin — development baseline: Categories 1–3
 
 Categories 1 and 2 implement the foundation, read-only broker contracts and
 pure risk-based trade preparation. The active entrypoint remains **OBSERVE ONLY**.
