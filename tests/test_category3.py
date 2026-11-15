@@ -88,7 +88,9 @@ class FakeTransport:
             "lastTransactionID": "1000",
             "account": {
                 "id": "acct-1", "openTradeCount": 0,
-                "pendingOrderCount": 0, "trades": [], "orders": []
+                "pendingOrderCount": 0, "trades": [], "orders": [],
+                "balance": "10000", "NAV": "10000",
+                "marginAvailable": "8000", "currency": "USD"
             },
         }
         self.quote = price_fixture()
@@ -544,6 +546,29 @@ class OrderEngineTests(unittest.TestCase):
         self.assertEqual(self.transport.posts, 0)
 
 
+
+    def test_P27_current_account_risk_budget_no_longer_fits(self):
+        self.transport.account["account"]["NAV"] = "9000"
+        with self.assertRaises(PreflightRejected):
+            self.submit()
+        self.assertEqual(self.transport.posts, 0)
+
+    def test_P27_current_account_margin_is_insufficient(self):
+        self.transport.account["account"]["marginAvailable"] = "1"
+        with self.assertRaises(PreflightRejected):
+            self.submit()
+        self.assertEqual(self.transport.posts, 0)
+
+    def test_P27_wrong_account_currency_or_invalid_NAV(self):
+        for key, value in (("currency", "EUR"), ("NAV", "NaN")):
+            previous = self.transport.account["account"][key]
+            self.transport.account["account"][key] = value
+            with self.subTest(key=key):
+                with self.assertRaises(PreflightRejected):
+                    self.submit()
+                self.assertEqual(self.transport.posts, 0)
+            self.transport.account["account"][key] = previous
+
     def test_P30_mt4_account_prohibited_from_client_id_order(self):
         self.transport.account["account"]["mt4AccountID"] = 123456
         with self.assertRaises(PreflightRejected):
@@ -733,6 +758,29 @@ class PracticeSafetyTests(unittest.TestCase):
         self.assertEqual(result.outcome, Outcome.UNKNOWN)
         self.assertEqual(transport.posts, 1)
         self.assertEqual(journal.get(first.attempt_id)["status"], "UNKNOWN")
+
+
+
+    def test_P19_low_level_transport_cannot_bypass_release_gate(self):
+        from unittest.mock import Mock
+        session = Mock()
+        transport = PracticeTransport(session=session)
+        with patch.object(config, "ORDER_WRITES_ENABLED", True):
+            with self.assertRaises(BrokerWriteDisabled):
+                transport._call("POST", "/orders", payload={"order": {"units": "10"}})
+            with self.assertRaises(BrokerWriteDisabled):
+                transport._call("PUT", "/trades/123/close", payload={})
+        session.request.assert_not_called()
+
+    def test_P20_cancel_without_broker_order_id_is_unknown(self):
+        classified = classify_response(
+            BrokerReply(201, {
+                "orderCancelTransaction": {
+                    "id": "101", "type": "ORDER_CANCEL"
+                }
+            }), "attempt"
+        )
+        self.assertEqual(classified.outcome, Outcome.UNKNOWN)
 
 
 

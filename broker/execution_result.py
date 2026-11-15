@@ -117,6 +117,8 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
             or not _broker_id(tx_cancel.get("id"))):
             return unknown("Invalid cancel transaction")
         order_id = tx_cancel.get("orderID")
+        if not _broker_id(order_id):
+            return unknown("Cancellation lacks valid broker order ID")
         return ExecutionResult(
             Outcome.CANCELLED, attempt_id, request_id,
             order_id=_broker_id(order_id), reason="Order cancellation transaction verified"

@@ -53,6 +53,13 @@ class PracticeTransport:
                 "Content-Type": "application/json"}
 
     def _call(self, verb, path, *, payload=None, params=None):
+        # The lowest-level HTTP boundary independently enforces the release
+        # gate; calling this private helper cannot bypass the POST block.
+        if verb != "GET":
+            if (verb != "POST" or path != "/orders"
+                or not _PRACTICE_WRITES_RELEASED
+                or config.ORDER_WRITES_ENABLED is not True):
+                raise BrokerWriteDisabled("Mutating broker HTTP is not released")
         if (not isinstance(path, str) or (path != "" and not path.startswith("/"))
             or ".." in path or "://" in path):
             raise BrokerCommunicationError("Invalid account API path")

@@ -55,7 +55,7 @@ class OrderEngine:
             raise PreflightRejected("Broker read returned uncertain HTTP/JSON")
         return answer
 
-    def _account_preflight(self):
+    def _account_preflight(self, plan: TradePlan):
         reply = self._read("")
         body = reply.body
         try:
@@ -72,6 +72,32 @@ class OrderEngine:
                 raise ValueError("Missing/inconsistent broker account inventory")
         except (KeyError, ValueError, TypeError) as exc:
             raise PreflightRejected("Account snapshot incomplete") from exc
+        # P27: do not apply an old monetary risk budget to an account whose
+        # current currency/equity/margin has changed since planning.
+        try:
+            if raw.get("currency") != plan.account_currency:
+                raise ValueError("Account currency changed")
+            equity = min(
+                number(raw["NAV"], "NAV", positive=True),
+                number(raw["balance"], "balance", positive=True)
+            )
+            free_margin = number(raw["marginAvailable"], "available margin")
+            if free_margin < 0:
+                raise ValueError("Negative available margin")
+            grade_pct = Decimal(str(
+                config.RISK_GRADE_A_PCT if plan.grade == "A"
+                else config.RISK_GRADE_B_PCT
+            ))
+            if number(plan.risk_budget_home, "risk budget", positive=True) > (
+                equity * grade_pct / Decimal("100")
+            ):
+                raise ValueError("Stale account NAV/balance risk budget")
+            if number(plan.estimated_margin_home, "planned margin", positive=True) > (
+                free_margin * Decimal(str(config.MAX_MARGIN_FRACTION))
+            ):
+                raise ValueError("Account margin fell below planned reserve")
+        except (KeyError, ValueError, TypeError) as exc:
+            raise PreflightRejected("Account risk/margin snapshot no longer matches plan") from exc
         # OANDA explicitly prohibits clientExtensions on MT4-associated
         # accounts. This field is a deny signal when available; Category 4
         # must additionally verify account properties before real activation.
@@ -112,7 +138,7 @@ class OrderEngine:
             raise PreflightRejected("Typed risk plan/instrument rules required")
         if not isinstance(conversion, QuoteConversions):
             raise PreflightRejected("Typed quote/home conversion context required")
-        checkpoint = self._account_preflight()
+        checkpoint = self._account_preflight(plan)
         price_reply = self._read(
             "/pricing", params={"instruments": plan.instrument}
         )

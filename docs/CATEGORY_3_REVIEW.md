@@ -45,6 +45,8 @@ previous POST did not execute. The attempt remains UNKNOWN and is never resent.
 ## Safety and deferrals
 
 - No real broker mutations, SL/TP changes or order/position closing.
+- A fresh full-account GET rechecks currency, NAV/balance risk budget and
+  available margin before any request is journaled.
 - Plan pricing must correspond to the exact fresh broker quote and conversion.
 - Configured 2-pip slippage is translated into direction-aware priceBound;
   quantization never increases size and enforces the original monetary risk cap.
