@@ -1,54 +1,66 @@
+"""Timezone-aware FX trading sessions and weekly market boundaries (P54).
+
+DST is calculated using IANA zoneinfo, not fixed UTC hour offsets. Session
+eligibility is separate from current broker tradeability; both are necessary
+before actual execution. This module never assumes crypto/metal hours.
+"""
 from __future__ import annotations
-import datetime as dt
-from typing import Optional
+
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+from utils.time_tools import require_utc, utc_now
+
 
 class MarketSessions:
-    """Menaxhon sesionet kryesore të tregtimit për Algin.
+    LONDON = ZoneInfo("Europe/London")
+    NEW_YORK = ZoneInfo("America/New_York")
+    TOKYO = ZoneInfo("Asia/Tokyo")
 
-    Qëllimi:
-    - Kontrollon nëse jemi brenda një sesioni aktiv.
-    - Kontrollet bëhen sipas orës UTC.
-    - Këto sesione mund të përditësohen nga config në të ardhmen.
+    @staticmethod
+    def _in_window(local: datetime, start: time, end: time) -> bool:
+        t = local.time()
+        return start <= t < end if start < end else t >= start or t < end
 
-    Sesionet tipike:
-    - Asia:   23:00 – 06:00 UTC
-    - London: 07:00 – 16:00 UTC
-    - NY:     13:00 – 22:00 UTC
-    """
+    def market_week_open(self, now=None) -> bool:
+        current = (utc_now() if now is None else require_utc(now))
+        new_york = current.astimezone(self.NEW_YORK)
+        day = new_york.weekday()  # Monday 0 ... Sunday 6
+        clock = new_york.time()
+        if day == 5:  # Saturday
+            return False
+        if day == 6:
+            return clock >= time(17, 0)
+        if day == 4:
+            return clock < time(17, 0)
+        return True
 
-    def __init__(self):
-        # Mund të bëhen dinamike nga config nëse do
-        self.asia_start  = dt.time(23, 0)
-        self.asia_end    = dt.time(6, 0)
-        self.london_start = dt.time(7, 0)
-        self.london_end   = dt.time(16, 0)
-        self.ny_start     = dt.time(13, 0)
-        self.ny_end       = dt.time(22, 0)
-
-    def _in_range(self, now: dt.datetime, start: dt.time, end: dt.time) -> bool:
-        """Kontrollon nëse një orë është brenda fillim–fund.
-
-        Trajton edhe rastet ku intervali kalon mesnatën (p.sh. 23:00–06:00).
-        """
-        t = now.time()
-        if start < end:
-            return start <= t <= end
-        else:
-            # Interval që kalon mesnatën
-            return t >= start or t <= end
-
-    def active_session(self, now: Optional[dt.datetime] = None) -> Optional[str]:
-        if now is None:
-            now = dt.datetime.now(dt.timezone.utc)
-
-        if self._in_range(now, self.asia_start, self.asia_end):
-            return "Asia"
-        if self._in_range(now, self.london_start, self.london_end):
+    def active_session(self, now=None):
+        current = utc_now() if now is None else require_utc(now)
+        if not self.market_week_open(current):
+            return None
+        london = current.astimezone(self.LONDON)
+        new_york = current.astimezone(self.NEW_YORK)
+        tokyo = current.astimezone(self.TOKYO)
+        if self._in_window(london, time(8), time(17)):
             return "London"
-        if self._in_range(now, self.ny_start, self.ny_end):
+        if self._in_window(new_york, time(8), time(17)):
             return "New York"
+        if self._in_window(tokyo, time(9), time(18)):
+            return "Asia"
         return None
 
-    def can_trade(self, now: Optional[dt.datetime] = None) -> bool:
-        """Roboti mund të tregtojë vetëm brenda sesioneve kryesore."""
+    def can_trade(self, now=None):
+        """Session schedule only: does NOT attest to live broker tradeability."""
         return self.active_session(now) is not None
+
+    def instrument_tradeable(self, instrument, *, now, broker_tradeable):
+        """P54 require separate verified broker status; never assume market open."""
+        if not isinstance(instrument, str) or instrument.count("_") != 1:
+            return False
+        # OANDA instrument-specific schedules vary; FX only in this policy.
+        base, quote = instrument.split("_")
+        fx = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"}
+        if base not in fx or quote not in fx:
+            return False
+        return broker_tradeable is True and self.can_trade(now)
