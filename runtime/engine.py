@@ -169,7 +169,9 @@ class TradingEngine:
                     local["be_done"] = True
                     self.store.save(self.state)
                 else:
-                    self.executor.move_stop(self.state, tid, entry)
+                    outcome = self.executor.move_stop(self.state, tid, entry)
+                    if outcome != 'CONFIRMED':
+                        continue
             if multiples >= Decimal("2") and not local.get("partial_done"):
                 spec = metadata(instrument_specs, local["instrument"])
                 step = Decimal(10) ** (-int(spec["tradeUnitsPrecision"]))
@@ -278,12 +280,15 @@ class TradingEngine:
                                  grade=signal.grade, score=str(signal.score), signal_id=signal_id)
                 outcome = self.executor.submit(self.state, plan, signal_id, signal.grade)
                 if outcome["status"] not in ("CONFIRMED", "BLOCKED", "REJECTED"):
-                    raise BrokerError("Unresolved order outcome; future entries blocked")
+                    self.events.emit('ENTRY_GATED', reason='Unresolved broker submit', status='BLOCKED')
+                    return
                 # Broker snapshot and NAV must be refreshed before another new order.
                 if outcome["status"] == "CONFIRMED":
                     return
             except BrokerError as exc:
                 self.events.emit("ENTRY_SKIPPED", instrument=inst, reason=exc.__class__.__name__)
+                if self._unresolved():
+                    return
                 continue
 
     def cycle(self):

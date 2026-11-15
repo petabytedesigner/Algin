@@ -34,7 +34,7 @@ class TradePlan:
             "stopLossOnFill": {"price": format(self.stop_loss, "f")},
             "takeProfitOnFill": {"price": format(self.take_profit, "f")},
             "clientExtensions": {"id": client_id, "tag": "algin"},
-            "tradeClientExtensions": {"tag": "algin"},
+            "tradeClientExtensions": {"id": client_id, "tag": "algin"},
         }
 
 
