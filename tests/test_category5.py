@@ -405,5 +405,118 @@ class NewsTests(unittest.TestCase):
                 news.load_news(now=self.now+timedelta(minutes=6))
 
 
+    def test_P52_scan_runs_strategy_only_once_per_new_M15(self):
+        from execution.trade_executor import TradeExecutor
+        signals = SimpleNamespace(
+            instrument="EUR_USD", direction="LONG", grade="B", score=70
+        )
+        with TemporaryDirectory() as directory:
+            gate = CandleGate("test-account", directory=directory)
+            with (
+                patch.object(config, "API_KEY", "dummy"),
+                patch.object(config, "ACCOUNT_ID", "test-account"),
+                patch("main.utc_now", return_value=NOW),
+                patch.object(TradeExecutor, "get_open_trades", return_value=[]),
+                patch("main.MarketSessions") as sessions,
+                patch("main.DataHandler") as data,
+                patch("main.Strategy") as strategy,
+                patch("main.CandleGate", return_value=gate),
+                patch("main.build_news_filter") as news
+            ):
+                sessions.return_value.can_trade.return_value = True
+                sessions.return_value.instrument_tradeable.return_value = True
+                data.return_value.get_candles.side_effect = (
+                    lambda symbol, *args:
+                    candles() if symbol == "EUR_USD" else None
+                )
+                data.return_value.get_price.return_value = {
+                    "bid": 1.1, "ask": 1.1002
+                }
+                strategy.return_value.ema_engine.ema.return_value = 1.101
+                strategy.return_value.atr_engine.atr.return_value = .001
+                strategy.return_value.evaluate_signal.return_value = signals
+                news.return_value.block_trading.return_value = "NEWS_UNKNOWN"
+                self.assertEqual(main.scan_once(), 0)
+                self.assertEqual(main.scan_once(), 0)
+                self.assertEqual(
+                    strategy.return_value.evaluate_signal.call_count, 2
+                )
+                self.assertEqual(
+                    news.return_value.block_trading.call_count, 1
+                )
+
+    def test_P54_no_broker_price_does_not_consume_candle(self):
+        from execution.trade_executor import TradeExecutor
+        with TemporaryDirectory() as directory:
+            gate = CandleGate("test-account", directory=directory)
+            with (
+                patch.object(config, "API_KEY", "dummy"),
+                patch.object(config, "ACCOUNT_ID", "test-account"),
+                patch("main.utc_now", return_value=NOW),
+                patch.object(TradeExecutor, "get_open_trades", return_value=[]),
+                patch("main.MarketSessions") as sessions,
+                patch("main.DataHandler") as data,
+                patch("main.Strategy") as strategy,
+                patch("main.CandleGate", return_value=gate),
+            ):
+                sessions.return_value.can_trade.return_value = True
+                sessions.return_value.instrument_tradeable.side_effect = (
+                    lambda *args, **kw: kw["broker_tradeable"]
+                )
+                data.return_value.get_candles.side_effect = (
+                    lambda symbol, *args:
+                    candles() if symbol == "EUR_USD" else None
+                )
+                data.return_value.get_price.return_value = None
+                self.assertEqual(main.scan_once(), 0)
+                self.assertFalse(gate.path.exists())
+                strategy.return_value.evaluate_signal.assert_not_called()
+
+    def test_P47_acceptably_imperfect_pattern_has_real_penalty(self):
+        from strategy.pattern_filters import PatternFilters
+        quality = PatternFilters().check(
+            candles(), .001, "UP"
+        )
+        self.assertTrue(quality.is_valid)
+        self.assertGreater(quality.quality, 0)
+        self.assertLess(quality.quality, 1)
+        engine = ScoringEngine()
+        base = {
+            "trend_strength": 1, "structure_quality": 1,
+            "retest_quality": 1, "candle_quality": 1,
+            "ema_alignment": 1, "atr_normalized": 1
+        }
+        self.assertLess(
+            engine.score({**base, "pattern_quality": quality.quality}),
+            engine.score(base)
+        )
+
+    def test_P47_unknown_reset_zone_rejected(self):
+        with self.assertRaises(ValueError):
+            ScoringEngine().score({"in_reset_zone": "unknown"})
+
+    def test_P52_broken_symlink_must_not_be_auto_reinitialized(self):
+        with TemporaryDirectory() as directory:
+            gate = CandleGate("account", directory=directory)
+            gate.path.parent.mkdir(parents=True)
+            gate.path.symlink_to(gate.path.parent / "missing-target")
+            with self.assertRaises(CandleGateError):
+                gate.claim("EUR_USD", "2026-11-15T09:45:00Z")
+            self.assertTrue(gate.path.is_symlink())
+
+    def test_P56_cache_invalidated_when_static_source_changes(self):
+        news = NewsFilter()
+        with (
+            patch.object(config, "STATIC_NEWS_LIST", [], create=True),
+            patch.object(config, "STATIC_NEWS_FETCHED_AT",
+                         iso_utc(self.now), create=True)
+        ):
+            self.assertEqual(news.load_news(now=self.now), [])
+            config.STATIC_NEWS_LIST = [self.high(self.now)]
+            refreshed = news.load_news(now=self.now)
+        self.assertEqual(len(refreshed), 1)
+
+
+
 if __name__ == "__main__":
     unittest.main()

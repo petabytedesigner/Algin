@@ -17,7 +17,7 @@ claim, parameter optimization or real broker order activation.
 | P44 | LONG needs EMA20 > EMA50 and UP; SHORT needs EMA20 < EMA50 and DOWN | Countertrend/overextended/reset blocks |
 | P45 | LONG last candle must be bullish, SHORT bearish, with doji/wick rejection | Directionless/counter-candle blocks |
 | P46 | Omit unmeasured liquidity_sweep from numerator AND denominator | Explicit measured zero still lowers score |
-| P47 | Apply pattern_quality as a bounded multiplicative factor; in_reset_zone blocks signal | Invalid/NaN metrics rejected |
+| P47 | Apply pattern_quality as a bounded multiplicative factor, including soft penalties for two near-threshold imperfections; in_reset_zone blocks signal | Invalid/NaN metrics rejected |
 | P50 | Only broker complete=true M15 bars; omit only incomplete final bar | Earlier incomplete or unknown completion rejected |
 | P51 | Strict UTC M15 alignment, ordered unique times, valid finite positive OHLC, recent closed bar and recent-gap check | No sorting, silent deduplication or stale-bar signals |
 | P52 | Per-account/instrument M15 gate, checksum + atomic/fsynced record, claimed before strategy | Same bar/restart/corrupted gate cannot create duplicate analysis |
@@ -51,3 +51,7 @@ claim, parameter optimization or real broker order activation.
 - Real Practice trading, provider news functionality, broker order execution
   and performance metrics remain unverified.
 - No merge to main until PR CI passes and the user authorizes integration.
+
+IANA timezone database is an explicit dependency (tzdata) for Windows/Termux
+installations without system zone information. Historical per-candle checkpoint
+and economic-calendar source invalidation are regression-tested.

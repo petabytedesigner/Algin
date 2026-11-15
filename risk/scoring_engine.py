@@ -64,7 +64,10 @@ class ScoringEngine:
     def score(self, metrics: Dict[str, float]) -> float:
         if not isinstance(metrics, dict):
             raise ValueError("Missing score metrics")
-        if metrics.get("in_reset_zone") is True:
+        reset = metrics.get("in_reset_zone", False)
+        if not isinstance(reset, bool):
+            raise ValueError("Unverified in_reset_zone status")
+        if reset:
             return 0.0
         numerator = denominator = 0.0
         for metric, config_name in self._WEIGHTS.items():

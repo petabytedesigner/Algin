@@ -36,11 +36,11 @@ class CandleGate:
         return json.dumps(x, sort_keys=True, separators=(",", ":")).encode()
 
     def _read(self):
+        if self.path.is_symlink():
+            raise CandleGateError("Symlink checkpoint rejected")
         if not self.path.exists():
             return {"version": 1, "account_id": self.account_id, "last": {}}
         try:
-            if self.path.is_symlink():
-                raise CandleGateError("Symlink checkpoint rejected")
             envelope = json.loads(self.path.read_text(encoding="utf-8"))
             data = envelope["data"]
             checksum = hashlib.sha256(self._dump(data)).hexdigest()

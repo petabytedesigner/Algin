@@ -111,9 +111,17 @@ class PatternFilters:
                     "Spike shumë i madh (>3× ATR)."
                 )
 
-        # Nëse kalon të gjitha filtrat
+        # Soft quality penalties only BELOW the hard rejection thresholds.
+        # These scores feed the Strategy's multiplicative pattern_quality.
+        quality = 1.0
+        if inside_count == 2:
+            quality *= 0.85
+        if directionless == 2:
+            quality *= 0.85
+        if trend_direction and count_against == 3:
+            quality *= 0.85
         return PatternFilterResult(
-            True,
-            1.0,
-            "Pattern i pastër, pa rreziqe."
+            True, quality,
+            "Pattern pranohet me penalizim." if quality < 1.0
+            else "Pattern i pastër, pa rreziqe."
         )

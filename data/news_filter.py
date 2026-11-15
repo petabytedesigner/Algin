@@ -29,6 +29,7 @@ class NewsFilter:
         self._events = None
         self._fetched_at = None
         self._checked_at = None
+        self._source_identity = None
 
     @staticmethod
     def _verify(payload: Any, now: datetime, max_age: timedelta):
@@ -89,7 +90,14 @@ class NewsFilter:
 
     def load_news(self, *, now=None):
         current = utc_now() if now is None else require_utc(now)
-        if self._events is not None and self._checked_at is not None:
+        static = getattr(config, "STATIC_NEWS_LIST", None)
+        source = (
+            getattr(config, "NEWS_PROVIDER_URL", None),
+            id(static) if static is not None else None,
+            getattr(config, "STATIC_NEWS_FETCHED_AT", None)
+        )
+        if (self._events is not None and self._checked_at is not None
+            and self._source_identity == source):
             if (current >= self._checked_at
                 and current - self._checked_at <= self.ttl
                 and current >= self._fetched_at
@@ -99,11 +107,13 @@ class NewsFilter:
         self._events = None
         self._checked_at = None
         self._fetched_at = None
+        self._source_identity = None
         payload = self._fetch()
         events, fetched = self._verify(payload, current, self.max_age)
         self._events = events
         self._fetched_at = fetched
         self._checked_at = current
+        self._source_identity = source
         return list(events)
 
     def filter_high_impact(self, news_list):
