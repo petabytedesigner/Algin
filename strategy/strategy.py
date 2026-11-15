@@ -97,6 +97,15 @@ class Strategy:
             atr=atr,
         )
 
+        # Enforce direction-specific trend and confirmed structure.
+        expected_trend = "UP" if direction == "LONG" else "DOWN"
+        if trend.direction != expected_trend:
+            return None
+        if structure.direction is not None and structure.direction != expected_trend:
+            return None
+        if trend.in_reset_zone:
+            return None
+
         # 3) Retest: qiriu i fundit ndaj zonës së dhënë
         retest = self.retest_engine.check_retest(
             candle=last_candle,
@@ -152,7 +161,8 @@ class Strategy:
             metrics["pattern_quality"] = 1.0
 
         # 9) Score total & Grade
-        score = self.scoring.score(metrics)
+        # Pattern quality must participate in scoring, not only explanatory text.
+        score = self.scoring.score(metrics) * pattern.quality
         grade = self.scoring.grade_from_score(score)
 
         # Nëse score është shumë i ulët, nuk e kthejmë si sinjal

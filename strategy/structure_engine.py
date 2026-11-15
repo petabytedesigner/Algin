@@ -44,43 +44,36 @@ class StructureEngine:
     # ------------------------------
 
     def _find_swings(self, candles: List[dict]) -> List[SwingPoint]:
+        """A pivot only exists after TWO later candles confirm its value."""
         swings = []
         for i in range(2, len(candles) - 2):
             p = candles[i]
-            if p["high"] > candles[i-1]["high"] and p["high"] > candles[i+1]["high"]:
+            left = candles[i-2:i]
+            right = candles[i+1:i+3]
+            if p["high"] > max(x["high"] for x in left + right):
                 swings.append(SwingPoint(i, p["high"], True))
-            if p["low"] < candles[i-1]["low"] and p["low"] < candles[i+1]["low"]:
+            if p["low"] < min(x["low"] for x in left + right):
                 swings.append(SwingPoint(i, p["low"], False))
         return swings
 
     def _detect_breaks(self, candles: List[dict], swings: List[SwingPoint]):
-        bos = False
-        choch = False
-        direction = None
-
-        if len(swings) < 2:
-            return bos, choch, direction
-
-        last = swings[-1]
-        prev = swings[-2]
-
-        close = candles[-1]["close"]
-
-        # BOS logic: body close over previous swing
-        if last.is_high and close > last.price:
-            bos = True
-            direction = "UP"
-        if (not last.is_high) and close < last.price:
-            bos = True
-            direction = "DOWN"
-
-        # CHoCH logic: break opposite structure
-        if direction == "UP" and close < prev.price:
-            choch = True
-        if direction == "DOWN" and close > prev.price:
-            choch = True
-
-        return bos, choch, direction
+        highs = [x for x in swings if x.is_high]
+        lows = [x for x in swings if not x.is_high]
+        if not highs or not lows:
+            return False, False, None
+        latest_close = candles[-1]["close"]
+        up = latest_close > highs[-1].price
+        down = latest_close < lows[-1].price
+        if up == down:
+            return False, False, None
+        previous_up = (len(highs) >= 2 and len(lows) >= 2 and
+                       highs[-1].price > highs[-2].price and
+                       lows[-1].price > lows[-2].price)
+        previous_down = (len(highs) >= 2 and len(lows) >= 2 and
+                         highs[-1].price < highs[-2].price and
+                         lows[-1].price < lows[-2].price)
+        change_of_character = previous_down if up else previous_up
+        return not change_of_character, change_of_character, "UP" if up else "DOWN"
 
     def _structure_quality(self, swings: List[SwingPoint]) -> float:
         if len(swings) < 3:

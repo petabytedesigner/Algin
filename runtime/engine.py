@@ -256,6 +256,9 @@ class TradingEngine:
             try:
                 candles = self.data.get_candles(inst)
                 candle_id = candles[-1]["time"]
+                age = (now - timestamp(candle_id)).total_seconds()
+                if age < 0 or age > 45 * 60:
+                    raise BrokerError("Last completed candle is stale or future")
                 if self.state["last_candles"].get(inst) == candle_id:
                     continue
                 setup = self._setup(inst, candles, now)

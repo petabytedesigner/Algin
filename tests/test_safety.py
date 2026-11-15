@@ -249,6 +249,18 @@ class FillVerificationTests(unittest.TestCase):
                 self.assertNotIn("CONFIRMED", [it["status"] for it in store.load()["intents"].values()])
 
 
+class StructureTests(unittest.TestCase):
+    def test_confirmed_choch_is_directional(self):
+        from strategy.structure_engine import StructureEngine, SwingPoint
+        swings = [SwingPoint(1, 120, True), SwingPoint(2, 100, False),
+                  SwingPoint(4, 110, True), SwingPoint(5, 90, False)]
+        e = StructureEngine()
+        bos, choch, direction = e._detect_breaks([{"close": 125}], swings)
+        self.assertEqual((bos, choch, direction), (False, True, "UP"))
+        bos, choch, direction = e._detect_breaks([{"close": 80}], swings)
+        self.assertEqual((bos, choch, direction), (True, False, "DOWN"))
+
+
 class CandleTests(unittest.TestCase):
     def test_incomplete_last_candle_excluded(self):
         class Client:
