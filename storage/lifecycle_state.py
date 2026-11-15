@@ -196,6 +196,8 @@ class LifecycleStore:
             from risk.trade_lifecycle import TradeRecord
             record = TradeRecord.from_dict(data["trades"][trade_id])
             if (not record.closed or not record.result_counted
+                or result["transaction_id"] not in data["counted_closures"]
+                or result["transaction_id"] not in data["processed_transactions"]
                 or result["transaction_id"] not in record.close_transaction_ids
                 or str(record.net_pl_home) != str(result["pl"])
                 or record.instrument != result["instrument"]):

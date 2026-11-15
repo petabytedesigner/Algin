@@ -131,7 +131,7 @@ class TradeRecord:
         """LONG exits at bid; SHORT exits at ask. Never absolute price move."""
         bid = _positive(bid, "bid")
         ask = _positive(ask, "ask")
-        if bid > ask or self.initial_risk_distance <= 0:
+        if bid >= ask or self.initial_risk_distance <= 0:
             raise LifecycleError("Unusable executable broker quote")
         mark = bid if self.direction == "LONG" else ask
         movement = (

@@ -294,7 +294,13 @@ class AccountReconciler:
                 or not isinstance(txs, list) or not txs
                 or txs[-1].get("id") != cursor):
                 raise ReconcileError("Incomplete transaction range or concurrent broker changes")
-            new_closures = self._apply_transactions(proposed, txs, cursor)
+            try:
+                new_closures = self._apply_transactions(proposed, txs, cursor)
+            except ReconcileError:
+                raise
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                # Malformed broker transactions never advance local cursor.
+                raise ReconcileError("Malformed transaction history: state unchanged") from exc
         blockers = []
         journal_by_id = {a["attempt_id"]: a for a in attempts}
         for tid, raw in broker_trades.items():

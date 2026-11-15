@@ -641,5 +641,25 @@ class OperationalIntegrationTests(LifecycleFixture):
 
 
 
+    def test_P40_malformed_close_raises_reconcile_error_and_preserves_cursor(self):
+        self.bootstrap()
+        self.update_broker({
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "time": "2026-11-15T10:20:00Z",
+            "tradesClosed": [{"tradeID": "11", "units": "-100"}]
+        }, close=True)
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        self.assertEqual(self.store.load()["cursor"], "100")
+
+    def test_P37_locked_bid_ask_not_valid_for_R(self):
+        self.bootstrap()
+        record = TradeRecord.from_dict(self.store.load()["trades"]["11"])
+        with self.assertRaises(LifecycleError):
+            record.favorable_r(bid="1.1000", ask="1.1000")
+
+
+
 if __name__ == "__main__":
     unittest.main()
