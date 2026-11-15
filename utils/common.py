@@ -22,7 +22,7 @@ def safe_request(
     timeout: int = 10,
 ) -> Optional[requests.Response]:
 
-    for i in range(retries):
+    for i in range(retries if method.upper() == 'GET' else 1):
         try:
             if method.upper() == "GET":
                 r = requests.get(url, headers=headers, params=params, timeout=timeout)
@@ -44,7 +44,7 @@ def safe_request(
 # ---------------------------------------------
 # Pricing i pastër (bid/ask/mid)
 # ---------------------------------------------
-import config_v10 as config
+import config as config
 
 def get_pricing(instrument: str) -> Optional[Dict[str,float]]:
     url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/pricing"

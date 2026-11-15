@@ -1,3 +1,5 @@
+"""Algin settings (Practice-only by design)."""
+import os
 
 # ================================
 #   CONFIG V10 FINAL
@@ -7,9 +9,10 @@
 # -------------------------
 #   OANDA API SETTINGS
 # -------------------------
-API_KEY = "PUT_YOUR_API_KEY"
-ACCOUNT_ID = "PUT_YOUR_ACCOUNT_ID"
+API_KEY = os.getenv("OANDA_API_TOKEN", "")
+ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
 OANDA_URL = "https://api-fxpractice.oanda.com/v3"
+ENABLE_ORDER_SUBMISSION = False  # Never auto-submit in development
 
 # -------------------------
 #   STRATEGY SETTINGS

@@ -1,31 +1,31 @@
 
-# main_v10.py - compact institutional version with full CSV logging (events 1–11)
+# main.py - compact institutional version with full CSV logging (events 1–11)
 # NOTE: This is a compact but complete version preserving full logic while avoiding size explosion.
 
 from __future__ import annotations
 import json, datetime as dt, os, csv
 from typing import Any, Dict, List
-import config_v10 as config
+import config as config
 
 # Utils
-from utils.utils_v10 import log, get_pricing, sleep_minutes, now_utc_iso
-from utils.time_tools import TimeToolsV10
+from utils.common import log, get_pricing, sleep_minutes, now_utc_iso
+from utils.time_tools import TimeTools
 
 # Data
-from data.data_handler_v10 import DataHandlerV10
-from data.news_filter_v10 import NewsFilterV10
+from data.data_handler import DataHandler
+from data.news_filter import NewsFilter
 from data.market_sessions import MarketSessions
 
 # Strategy
-from strategy.strategy_v10 import StrategyV10
+from strategy.strategy import Strategy
 
 # Risk
-from risk.risk_engine_v10 import RiskEngine, RiskConfig
+from risk.risk_engine import RiskEngine, RiskConfig
 from risk.exposure_engine import ExposureEngine
 from risk.cooldown_engine import CooldownEngine
 
 # Execution
-from execution.trade_executor_v10 import TradeExecutorV10, OrderRequest
+from execution.trade_executor import TradeExecutor, OrderRequest
 from execution.partial_close_engine import PartialCloseEngine
 from execution.safety_check import SafetyCheck
 from execution.order_validation import OrderValidation
@@ -65,13 +65,13 @@ def csv_log(event:str, inst:str="", direction:str="", grade:str="", score:str=""
 # ----------------------- MAIN LOOP -----------------------
 def main_loop():
     state=load_state()
-    tt=TimeToolsV10()
+    tt=TimeTools()
 
-    data=DataHandlerV10()
-    news=NewsFilterV10()
+    data=DataHandler()
+    news=NewsFilter()
     sessions=MarketSessions()
-    strat=StrategyV10()
-    execu=TradeExecutorV10()
+    strat=Strategy()
+    execu=TradeExecutor()
     partial=PartialCloseEngine(execu)
     safety=SafetyCheck()
     validator=OrderValidation()
@@ -93,7 +93,7 @@ def main_loop():
     instruments=["EUR_USD","GBP_USD","USD_JPY","USD_CAD","AUD_USD","NZD_USD","GBP_JPY","EUR_JPY","XAU_USD","BTC_USD"]
 
     while True:
-        now=dt.datetime.utcnow()
+        now=dt.datetime.now(dt.timezone.utc)
         state["last_run"]=now_utc_iso()
         open(config.HEARTBEAT_PATH,"w").write(f"ALIVE {now_utc_iso()}")
 
@@ -151,6 +151,9 @@ def main_loop():
                 continue
 
             req=OrderRequest(inst,"BUY" if units>0 else "SELL",units,sl,tp,"V10",sig.reason)
+            if not config.ENABLE_ORDER_SUBMISSION:
+                csv_log('SUBMIT_DISABLED', inst, extra='development gate')
+                continue
             trade_id=execu.open_market_order(req)
             if trade_id:
                 state["open_trades"][trade_id]={

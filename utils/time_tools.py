@@ -12,13 +12,13 @@ from typing import Optional
 #   - orari aktual i tregut
 # ------------------------------------------------------
 
-class TimeToolsV10:
+class TimeTools:
 
     # -----------------------------------
     #  Timestamp ISO
     # -----------------------------------
     def now_iso(self) -> str:
-        return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat() + "Z"
 
     # -----------------------------------
     #  Parsing ISO8601 → datetime
