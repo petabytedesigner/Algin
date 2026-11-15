@@ -24,6 +24,7 @@ from execution.safety_check import SafetyCheck
 from risk.trade_plan import InstrumentRules, QuoteConversions, TradePlan, number
 from storage.intent_journal import IntentJournal, JournalError, _identity
 from utils.time_tools import require_utc
+from telemetry.events import AuditEvents, event_id
 
 
 def _strict_id(value):
@@ -37,10 +38,17 @@ def _result_unknown(attempt_id, reason):
 class OrderEngine:
     """P19–P30. Live entry is disabled pending separate operational release."""
 
-    def __init__(self, account_id: str, *, transport=None, journal=None):
+    def __init__(self, account_id: str, *, transport=None, journal=None, audit=None):
         self.account_id = _identity(account_id, "account ID")
         self.transport = transport if transport is not None else PracticeTransport()
+        synthetic_journal = journal is not None
         self.journal = journal if journal is not None else IntentJournal(account_id)
+        self.audit = audit if audit is not None else AuditEvents(
+            account_id, directory=(
+                str(self.journal.path.parent / "audit")
+                if synthetic_journal else None
+            )
+        )
         if self.journal.account_id != account_id:
             raise PreflightRejected("Journal belongs to another account")
 
@@ -138,22 +146,49 @@ class OrderEngine:
             raise PreflightRejected("Typed risk plan/instrument rules required")
         if not isinstance(conversion, QuoteConversions):
             raise PreflightRejected("Typed quote/home conversion context required")
-        checkpoint = self._account_preflight(plan)
+        try:
+            checkpoint = self._account_preflight(plan)
+        except PreflightRejected:
+            self.audit.emit(
+                "RISK", eid=event_id("blocked-account-risk", signal_id),
+                stage="RISK", outcome="BLOCKED",
+                reason_code="ACCOUNT_RISK_OR_MARGIN_UNVERIFIED",
+                signal_id=signal_id, instrument=plan.instrument
+            )
+            raise
         price_reply = self._read(
             "/pricing", params={"instruments": plan.instrument}
         )
-        quote = parse_market_quote(
-            price_reply.body, plan.instrument, rules, now=now,
-            max_age_seconds=config.MAX_QUOTE_AGE_SECONDS,
-            max_spread_pips=Decimal(str(config.MAX_SPREAD_PIPS)),
-        )
+        try:
+            quote = parse_market_quote(
+                price_reply.body, plan.instrument, rules, now=now,
+                max_age_seconds=config.MAX_QUOTE_AGE_SECONDS,
+                max_spread_pips=Decimal(str(config.MAX_SPREAD_PIPS)),
+            )
+        except PreflightRejected:
+            self.audit.emit(
+                "SIGNAL_BLOCK", eid=event_id("blocked-quote", signal_id),
+                stage="PREFLIGHT", outcome="BLOCKED",
+                reason_code="SPREAD_OR_QUOTE_UNVERIFIED",
+                signal_id=signal_id, instrument=plan.instrument
+            )
+            raise
         attempt_id = "algin-" + uuid.uuid4().hex
-        prepared = build_market_order(
-            plan, rules, conversion, quote, attempt_id=attempt_id,
-            signal_id=signal_id,
-            slippage_pips=Decimal(str(config.SLIPPAGE_ALLOWED)),
-            minimum_stop_pips=Decimal(str(config.MIN_DISTANCE_PIPS)),
-        )
+        try:
+            prepared = build_market_order(
+                plan, rules, conversion, quote, attempt_id=attempt_id,
+                signal_id=signal_id,
+                slippage_pips=Decimal(str(config.SLIPPAGE_ALLOWED)),
+                minimum_stop_pips=Decimal(str(config.MIN_DISTANCE_PIPS)),
+            )
+        except PreflightRejected:
+            self.audit.emit(
+                "RISK", eid=event_id("blocked-plan", signal_id),
+                stage="RISK", outcome="BLOCKED",
+                reason_code="FINAL_ORDER_RISK_REJECTED",
+                signal_id=signal_id, instrument=plan.instrument
+            )
+            raise
         # The HTTP request is not permitted until this write is durable.
         self.journal.begin(
             signal_id=signal_id, attempt_id=attempt_id,
@@ -161,6 +196,24 @@ class OrderEngine:
             risk_pct=format(number(plan.reserved_risk_pct, "reserved risk", positive=True), "f"),
             margin_home=format(number(plan.estimated_margin_home, "margin", positive=True), "f"),
             grade=plan.grade,
+        )
+        # Both the intent AND the sanitized attempt event must be durable
+        # BEFORE the single permitted (simulated) broker POST.
+        self.audit.emit(
+            "RISK", eid=event_id("risk", attempt_id), stage="RISK",
+            outcome="OBSERVED", reason_code="PLAN_PREFLIGHT_VALIDATED",
+            signal_id=signal_id, attempt_id=attempt_id,
+            instrument=plan.instrument, direction=plan.direction,
+            grade=plan.grade, risk_pct=plan.reserved_risk_pct
+        )
+        self.audit.emit(
+            "ORDER_ATTEMPT", eid=event_id("prepare", attempt_id),
+            stage="BROKER", outcome="PREPARED",
+            signal_id=signal_id, attempt_id=attempt_id,
+            instrument=plan.instrument, direction=plan.direction,
+            grade=plan.grade, units=prepared.units,
+            requested_price=prepared.bound, risk_pct=plan.reserved_risk_pct,
+            spread_pips=prepared.spread_pips
         )
         self.journal.transition(attempt_id, "IN_FLIGHT", status_note=f"checkpoint={checkpoint}")
         # No loop. No requests adapter retries. No retry even if POST never
@@ -197,7 +250,19 @@ class OrderEngine:
             data["trade_reduced"] = result.trade_reduced
         if result.trades_closed:
             data["trades_closed"] = list(result.trades_closed)
-        self.journal.transition(result.attempt_id, result.outcome.value, **data)
+        record = self.journal.transition(result.attempt_id, result.outcome.value, **data)
+        self.audit.emit(
+            "ORDER_RESULT",
+            eid=event_id("outcome", result.attempt_id, result.outcome.value),
+            stage="BROKER", outcome=result.outcome.value,
+            reason_code=("BROKER_RESULT_UNKNOWN" if result.outcome == Outcome.UNKNOWN
+                         else "BROKER_TRANSACTION_CONFIRMED"),
+            signal_id=record["signal_id"], attempt_id=result.attempt_id,
+            order_id=result.order_id or "", trade_id=result.trade_id or "",
+            instrument=record["request"]["order"]["instrument"],
+            executed_price=result.fill_price, units=result.filled_units,
+            grade=record.get("grade") or ""
+        )
 
     def _postfill_protection(self, result: ExecutionResult, payload: dict) -> ExecutionResult:
         if result.trade_reduced is not None or result.trades_closed:
@@ -241,9 +306,19 @@ class OrderEngine:
                 result, reason="Fill confirmed but protection/ownership unverified"
             )
         # Confirm protection status durably; no autonomous repair or close.
-        self.journal.transition(
+        saved = self.journal.transition(
             result.attempt_id, "FILLED", protection_verified=True,
             status_note="Broker trade ownership and SL/TP confirmed",
+        )
+        self.audit.emit(
+            "TRADE", eid=event_id("protected", result.attempt_id, result.trade_id),
+            stage="RECONCILIATION", outcome="VERIFIED",
+            reason_code="TRADE_OWNERSHIP_SL_TP_VERIFIED",
+            signal_id=saved["signal_id"], attempt_id=result.attempt_id,
+            order_id=result.order_id or "", trade_id=result.trade_id,
+            instrument=saved["request"]["order"]["instrument"],
+            executed_price=result.fill_price,
+            units=result.filled_units, grade=saved.get("grade") or ""
         )
         return replace(
             result, protection_verified=True, reason="Fill and SL/TP confirmed"

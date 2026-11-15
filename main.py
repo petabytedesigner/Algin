@@ -1,4 +1,4 @@
-"""Category-5 read-only entrypoint; broker mutations are not implemented here.
+"""Category-6 read-only entrypoint; broker mutations are not implemented here.
 
 Strategy and risk output remains advisory. Break-even and partial-close
 intents may be prepared locally, but real broker mutations are disabled.
@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from hashlib import sha256
 from functools import lru_cache
 from datetime import datetime, timezone
 
@@ -26,6 +27,7 @@ from risk.risk_engine import Grade, RiskConfig, RiskEngine, TradeCandidate
 from risk.trade_plan import RiskPolicy, TradePlanner
 from strategy.strategy import Strategy
 from utils.time_tools import utc_now
+from telemetry.runtime import observed_cycle, emit_block, CURRENT
 
 LOG = logging.getLogger("algin")
 
@@ -110,6 +112,7 @@ def build_news_filter():
     )
 
 
+@observed_cycle("SCAN")
 def scan_once() -> int:
     """One read-only observation cycle; fail closed on broker uncertainty."""
     if not config.API_KEY or not config.ACCOUNT_ID:
@@ -119,13 +122,16 @@ def scan_once() -> int:
     try:
         open_trades = executor.get_open_trades()
     except BrokerDataError as exc:
+        emit_block("BROKER_SNAPSHOT_UNVERIFIED", stage="BROKER")
         LOG.error("Cannot verify open broker exposure: %s", exc)
         return 3
     if open_trades:
+        emit_block("EXPOSURE_UNRECONCILED", stage="RISK")
         LOG.warning("Broker positions exist; risk assessment blocked until reconciliation")
         return 0
     now = utc_now()
     if config.ENABLE_SESSIONS and not MarketSessions().can_trade(now):
+        emit_block("OUTSIDE_ENTRY_SESSION", kind="SESSION_BLOCK", stage="SESSION")
         LOG.info("Outside configured session (read-only scan)")
         return 0
     # A successful openTrades GET does not establish an EMPTY account:
@@ -139,6 +145,7 @@ def scan_once() -> int:
         # Historical V10 inputs; category 5 must validate completed candles.
         candles = data.get_candles(instrument, "M15", 200)
         if not candles or len(candles) < 50:
+            emit_block("CANDLES_INSUFFICIENT", instrument=instrument, stage="FEED")
             LOG.info("%s: no usable completed M15 history", instrument)
             continue
         try:
@@ -147,6 +154,8 @@ def scan_once() -> int:
                 max_age_minutes=config.SIGNAL_CANDLE_MAX_AGE_MINUTES
             )
         except (CandleDataError, ValueError) as exc:
+            emit_block("STALE_OR_INVALID_CANDLES", instrument=instrument,
+                       stage="FEED")
             LOG.warning("%s: blocked invalid M15 data: %s", instrument, exc)
             continue
         # Do not consume the candle when the instrument is not tradeable.
@@ -154,13 +163,18 @@ def scan_once() -> int:
         if not MarketSessions().instrument_tradeable(
             instrument, now=now, broker_tradeable=quote is not None
         ):
+            emit_block("BROKER_PRICE_UNTRADEABLE", instrument=instrument,
+                       stage="PREFLIGHT")
             LOG.info("%s: instrument not verified tradeable", instrument)
             continue
         try:
             if not gate.claim(instrument, candles[-1]["time"]):
+                emit_block("CANDLE_ALREADY_PROCESSED", instrument=instrument,
+                           stage="FEED", candle_time=candles[-1]["time"])
                 LOG.debug("%s: completed M15 candle already processed", instrument)
                 continue
         except CandleGateError as exc:
+            emit_block("CANDLE_GATE_UNVERIFIED", instrument=instrument, stage="FEED")
             LOG.warning("%s: M15 checkpoint unavailable: %s", instrument, exc)
             continue
         closes = [c["close"] for c in candles]
@@ -168,28 +182,62 @@ def scan_once() -> int:
         slow = strategy.ema_engine.ema(closes, config.EMA_SLOW)
         atr = strategy.atr_engine.atr(candles, period=config.ATR_PERIOD)
         if fast is None or slow is None or not atr or atr <= 0:
+            emit_block("INDICATORS_UNAVAILABLE", instrument=instrument,
+                       stage="STRATEGY", candle_time=candles[-1]["time"])
             continue
         # Legacy arguments retained for the Strategy public interface.
         # Category 5 derives the true retest zone from PRE-breakout swings.
         zone_low = min(c["low"] for c in candles[:-1][-10:])
         zone_high = max(c["high"] for c in candles[:-1][-10:])
-        signals = [
-            strategy.evaluate_signal(instrument, direction, candles, fast, slow,
-                                     atr, zone_low, zone_high, now)
-            for direction in ("LONG", "SHORT")
-        ]
-        signals = [s for s in signals if s is not None]
+        signals = []
+        for direction in ("LONG", "SHORT"):
+            signal = strategy.evaluate_signal(
+                instrument, direction, candles, fast, slow, atr,
+                zone_low, zone_high, now
+            )
+            if signal is not None:
+                signals.append(signal)
+            else:
+                reason = getattr(strategy, "last_rejection_code", None)
+                if not isinstance(reason, str) or not reason.isupper():
+                    reason = "NO_SIGNAL"
+                emit_block(reason, instrument=instrument, stage="STRATEGY",
+                           direction=direction, candle_time=candles[-1]["time"])
         if not signals:
             continue
         signal = max(signals, key=lambda s: s.score)
         LOG.info("%s %s grade=%s score=%.2f risk=NOT_EVALUATED_UNRECONCILED OBSERVE_ONLY",
                  instrument, signal.direction, signal.grade, signal.score)
+        active = CURRENT.get()
+        if active is not None:
+            sig_id = "sig-" + sha256(
+                (instrument + "|" + candles[-1]["time"] + "|" + signal.direction
+                 ).encode()
+            ).hexdigest()[:32]
+            active.emit("SIGNAL", stage="STRATEGY", outcome="OBSERVED",
+                        instrument=instrument, direction=signal.direction,
+                        grade=signal.grade, candle_time=candles[-1]["time"],
+                        signal_id=sig_id)
+            active.emit("RISK", stage="RISK", outcome="UNVERIFIED",
+                        reason_code="NOT_EVALUATED_UNRECONCILED",
+                        instrument=instrument, direction=signal.direction,
+                        grade=signal.grade, candle_time=candles[-1]["time"],
+                        signal_id=sig_id)
         news_status = calendar.block_trading(instrument, now)
         if news_status is not None:
+            news_code = (
+                "NEWS_UNKNOWN" if news_status.startswith("NEWS_UNKNOWN")
+                else "NEWS_HIGH_IMPACT"
+            )
+            emit_block(news_code, instrument=instrument,
+                       kind="NEWS_BLOCK", stage="NEWS",
+                       direction=signal.direction,
+                       candle_time=candles[-1]["time"])
             LOG.warning("%s: entry blocked by news gate: %s", instrument, news_status)
     return 0
 
 
+@observed_cycle("MANAGEMENT")
 def manage_once() -> int:
     """Read-only recovery before evaluating entry sessions or signals."""
     if not config.API_KEY or not config.ACCOUNT_ID:
@@ -198,9 +246,11 @@ def manage_once() -> int:
     try:
         report = ManagementLoop(AccountReconciler(config.ACCOUNT_ID)).run_once()
     except (ReconcileError, StateError, JournalError, ValueError) as exc:
+        emit_block("RECONCILIATION_UNVERIFIED", stage="RECONCILIATION")
         LOG.error("Lifecycle reconciliation blocked: %s", exc)
         return 3
     if report.blocked_reasons:
+        emit_block("RECONCILIATION_BLOCKED", stage="RECONCILIATION")
         LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
         return 3
     LOG.info("Account cursor=%s managed_trades=%d no_broker_writes",
@@ -208,8 +258,22 @@ def manage_once() -> int:
     return 0
 
 
+@observed_cycle("MANAGEMENT")
+def reconcile_under_lease(reconciler) -> int:
+    """One read-only reconciliation cycle while the caller holds its lease."""
+    try:
+        report = reconciler.run()
+    except (ReconcileError, StateError, JournalError, ValueError):
+        emit_block("RECONCILIATION_UNVERIFIED", stage="RECONCILIATION")
+        return 3
+    if report.blocked_reasons:
+        emit_block("RECONCILIATION_BLOCKED", stage="RECONCILIATION")
+        return 3
+    return 0
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Algin Category 5 read-only baseline")
+    parser = argparse.ArgumentParser(description="Algin Category 6 read-only baseline")
     parser.add_argument("--check", action="store_true", help="Verify imports without network")
     parser.add_argument("--once", action="store_true", help="One legacy read-only signal scan")
     parser.add_argument("--manage-once", action="store_true",
@@ -217,10 +281,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if config.ORDER_WRITES_ENABLED:
-        LOG.error("Category-5 build rejects any order-enabled configuration")
+        LOG.error("Category-6 build rejects any order-enabled configuration")
         return 3
     if args.check:
-        LOG.info("Category-5 imports OK; broker writes DISABLED")
+        LOG.info("Category-6 imports OK; broker writes DISABLED")
         return 0
     if args.manage_once:
         return manage_once()
@@ -235,10 +299,9 @@ def main(argv=None) -> int:
         with AccountReconciler(config.ACCOUNT_ID) as reconciler:
             while True:
                 # P36: recovery before checking any entry-session constraint.
-                report = reconciler.run()
-                if report.blocked_reasons:
-                    LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
-                    return 3
+                management_status = reconcile_under_lease(reconciler)
+                if management_status:
+                    return management_status
                 result = scan_once()
                 if result:
                     return result

@@ -15,6 +15,8 @@ from risk.trade_plan import number
 from storage.lifecycle_state import LifecycleStore, ProcessLease, StateError
 from storage.intent_journal import IntentJournal, JournalError
 from utils.time_tools import parse_utc
+from telemetry.events import AuditEvents, event_id
+from pathlib import Path
 
 
 class ReconcileError(RuntimeError):
@@ -38,8 +40,9 @@ class AccountReconciler:
     """Use as a held process context, including outside entry-session hours."""
 
     def __init__(self, account_id: str, *, transport=None, journal=None,
-                 store=None, lease=None, directory=".local"):
+                 store=None, lease=None, directory=".local", audit=None):
         self.account_id = account_id
+        synthetic_store = store is not None
         self.transport = transport if transport is not None else PracticeTransport()
         self.journal = journal if journal is not None else IntentJournal(account_id)
         self.store = store if store is not None else LifecycleStore(
@@ -47,6 +50,14 @@ class AccountReconciler:
         )
         self.lease = lease if lease is not None else ProcessLease(
             account_id, directory=directory
+        )
+        # Injected test state has its own isolated audit directory. Production
+        # uses CSV_PATH, preserving the Category-6 configuration contract.
+        self.audit = audit if audit is not None else AuditEvents(
+            account_id, directory=(
+                str(self.store.path.parent.parent / "audit") if synthetic_store
+                else None
+            )
         )
         if self.journal.account_id != account_id or self.store.account_id != account_id:
             raise ReconcileError("Cross-account journal or lifecycle state")
@@ -256,6 +267,55 @@ class AccountReconciler:
         state["cursor"] = target_cursor
         return new_closures
 
+
+    def _record_confirmed_events(self, state):
+        """Backfill from durable verified state on every run, idempotently.
+
+        A failed CSV append can never make a confirmed broker close vanish:
+        the next safe run replays from the state snapshot without a broker POST.
+        """
+        for trade_id, raw in sorted(state["trades"].items()):
+            trade = TradeRecord.from_dict(raw)
+            common = {
+                "trade_id": trade_id, "attempt_id": trade.attempt_id,
+                "instrument": trade.instrument, "direction": trade.direction,
+                "grade": trade.grade, "risk_pct": trade.risk_pct,
+            }
+            if trade.be_state == "CONFIRMED":
+                self.audit.emit(
+                    "BE", eid=event_id("be-confirmed", self.account_id, trade_id),
+                    stage="MANAGEMENT", outcome="CONFIRMED",
+                    reason_code="BROKER_BE_CONFIRMED", **common
+                )
+            for phase, values in sorted(trade.partial_phases.items()):
+                if values["state"] == "CONFIRMED":
+                    self.audit.emit(
+                        "PARTIAL", eid=event_id(
+                            "partial-confirmed", self.account_id, trade_id, phase
+                        ), stage="MANAGEMENT", outcome="CONFIRMED",
+                        reason_code="BROKER_PARTIAL_CONFIRMED",
+                        units=values["units"], **common
+                    )
+            if trade.closed and trade.result_counted:
+                result = state["closed_results"].get(trade_id)
+                if result is None:
+                    raise ReconcileError("Trade outcome missing from durable account state")
+                self.audit.emit(
+                    "CLOSE", eid=event_id(
+                        "close-confirmed", self.account_id, trade_id,
+                        result["transaction_id"]
+                    ), stage="ACCOUNTING", outcome="CLOSED",
+                    reason_code="BROKER_CLOSURE_CONFIRMED",
+                    transaction_id=result["transaction_id"], **common
+                )
+                if trade.net_pl_home < 0 and trade.instrument in state["cooldowns"]:
+                    self.audit.emit(
+                        "COOLDOWN", eid=event_id(
+                            "cooldown", self.account_id, trade_id
+                        ), stage="RISK", outcome="BLOCKED",
+                        reason_code="REALIZED_LOSS_COOLDOWN", **common
+                    )
+
     def run(self):
         if not self._active:
             raise ReconcileError("Process-wide management lease required")
@@ -346,6 +406,7 @@ class AccountReconciler:
                 lambda s: s.update(proposed),
                 expected_cursor=persisted["cursor"],
             )
+        self._record_confirmed_events(proposed)
         return ReconcileReport(
             cursor, tuple(sorted(
                 tid for tid in broker_trades if tid in proposed["trades"]

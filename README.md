@@ -1,4 +1,4 @@
-# Algin — development baseline: Categories 1–5
+# Algin — development baseline: Categories 1–6
 
 Categories 1 and 2 implement the foundation, read-only broker contracts and
 pure risk-based trade preparation. The active entrypoint remains **OBSERVE ONLY**.
@@ -113,3 +113,23 @@ is NEWS_UNKNOWN and **new entries must remain blocked**; P55 is explicitly
 external. These are read-only development checks, not live trading release.
 
 See docs/CATEGORY_5_REVIEW.md. Broker writes remain DISABLED.
+
+## Category 6 — durable audit and offline performance analysis
+
+The unified, account-scoped event CSV uses strict versioned columns, fixed
+no-entry reason codes, idempotent event IDs and CSV_LOG_* configuration flags.
+Heartbeat reports ALIVE, CYCLE_COMPLETE and BLOCKED without mistaking
+openTrades-only checks for full broker reconciliation.
+
+TradeTrace correlates signal -> risk -> intent -> broker result -> fill ->
+confirmed closure. Analytics enforce conservative stop-first handling for
+ambiguous OHLC and complete cost components without double-counting spread,
+slippage, financing or commissions. Closed-trade reports include net P/L,
+expectancy, profit factor, drawdown, streaks, instrument/session results
+and large-winner concentration.
+
+Offline integration tests cover LONG/SHORT, preflight refusals, lost broker
+responses, restart reconciliation, and durable telemetry integrity. Real OANDA
+Practice mutation is still hard-DISABLED and the bot remains OBSERVE_ONLY.
+External news provider P55 remains unconnected. Full details and limitations
+are in docs/CATEGORY_6_REVIEW.md.
