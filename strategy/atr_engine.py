@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Dict
 
 class ATREngine:
-    """Llogarit ATR dhe versione të normalizuara për V10.
+    """Llogarit ATR dhe versione të normalizuara për Algin.
 
     Përdoret për:
     - SL buffer (p.sh. 0.5 × ATR)

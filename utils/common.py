@@ -1,92 +1,96 @@
+"""Read-only compatibility utilities.
+
+No POST/PUT operation is accepted by this HTTP adapter. Mutation execution
+will be centralized with durable intent/reconciliation in Category 3.
+"""
 from __future__ import annotations
-import requests, time, json, datetime as dt
-from typing import Optional, Dict, Any
+
+import logging
+from math import isfinite
+import time
+from typing import Any, Dict, Optional
+
+import requests
+
+import config
 from utils.time_tools import iso_utc, utc_now
 
-# ---------------------------------------------
-# Logging minimal, i pastër dhe i sigurt
-# ---------------------------------------------
-def log(msg: str) -> None:
-    now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now}] {msg}")
 
-# ---------------------------------------------
-# Kërkesa të sigurta HTTP me retry
-# ---------------------------------------------
+LOG = logging.getLogger("algin.common")
+
+
+def log(msg: str) -> None:
+    LOG.info("%s", msg)
+
+
 def safe_request(
     method: str,
     url: str,
-    headers: Optional[Dict[str,str]] = None,
-    params: Optional[Dict[str,Any]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, Any]] = None,
     data: Optional[str] = None,
     retries: int = 3,
     timeout: int = 10,
 ) -> Optional[requests.Response]:
-
-    if method.upper() != "GET":
-        raise RuntimeError("Category-1 blocks broker mutations; no POST/PUT retries")
-    for i in range(retries):
+    """GET-only adapter; a broker read failure returns None, never success."""
+    if not isinstance(method, str) or method.upper() != "GET":
+        raise RuntimeError("Read-only adapter: broker mutation prohibited")
+    # Retain the historical signature, but only read-only requests can retry.
+    if not isinstance(retries, int) or retries < 1:
+        raise ValueError("GET retries must be a positive integer")
+    for attempt in range(retries):
         try:
-            if method.upper() == "GET":
-                r = requests.get(url, headers=headers, params=params, timeout=timeout)
-            elif method.upper() == "POST":
-                r = requests.post(url, headers=headers, params=params, data=data, timeout=timeout)
-            elif method.upper() == "PUT":
-                r = requests.put(url, headers=headers, params=params, data=data, timeout=timeout)
-            else:
-                log(f"⚠️ safe_request: metoda {method} jo e njohur")
-                return None
-
-            return r
-        except Exception as e:
-            log(f"⚠️ safe_request error ({i+1}/{retries}): {e}")
-            time.sleep(1.0)
-
+            return requests.get(url, headers=headers, params=params, timeout=timeout)
+        except requests.RequestException:
+            LOG.warning("GET failed (attempt %s/%s)", attempt + 1, retries)
+            if attempt + 1 < retries:
+                time.sleep(1.0)
     return None
 
-# ---------------------------------------------
-# Pricing i pastër (bid/ask/mid)
-# ---------------------------------------------
-import config as config
 
-def get_pricing(instrument: str) -> Optional[Dict[str,float]]:
+def get_pricing(instrument: str) -> Optional[Dict[str, float]]:
+    """Legacy read-only helper; reject ambiguous or non-tradeable quotes."""
     url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/pricing"
     headers = {"Authorization": f"Bearer {config.API_KEY}"}
-    params = {"instruments": instrument}
-
-    r = safe_request("GET", url, headers=headers, params=params)
-    if not r or r.status_code != 200:
+    response = safe_request(
+        "GET", url, headers=headers, params={"instruments": instrument}
+    )
+    if response is None or response.status_code != 200:
         return None
-
     try:
-        jp = r.json()
-        p = jp["prices"][0]
-        bid = float(p["bids"][0]["price"])
-        ask = float(p["asks"][0]["price"])
-        return {"bid": bid, "ask": ask, "mid": (bid+ask)/2}
-    except:
+        prices = response.json()["prices"]
+        if not isinstance(prices, list):
+            return None
+        matches = [
+            price for price in prices
+            if isinstance(price, dict) and price.get("instrument") == instrument
+            and price.get("tradeable") is True
+        ]
+        if len(matches) != 1:
+            return None
+        bid = float(matches[0]["bids"][0]["price"])
+        ask = float(matches[0]["asks"][0]["price"])
+        if not (isfinite(bid) and isfinite(ask) and 0 < bid < ask):
+            return None
+        return {"bid": bid, "ask": ask, "mid": (bid + ask) / 2}
+    except (ValueError, TypeError, KeyError, IndexError, OverflowError):
         return None
 
-# ---------------------------------------------
-# Sleep minutes (përdoret nga main)
-# ---------------------------------------------
-def sleep_minutes(m: int) -> None:
-    time.sleep(m * 60)
 
-# ---------------------------------------------
-# Timestamps të pastër
-# ---------------------------------------------
+def sleep_minutes(minutes: int) -> None:
+    time.sleep(minutes * 60)
+
+
 def now_utc_iso() -> str:
     return iso_utc(utc_now())
 
-# ---------------------------------------------
-# Llogaritja e madhësisë së një pip-i për çdo instrument
-# ---------------------------------------------
+
 def pip_size(instrument: str) -> float:
+    """Legacy approximate helper; broker metadata required for risk sizing."""
     if instrument.endswith("JPY"):
         return 0.01
-    if "XAU" in instrument:  # Gold
+    if "XAU" in instrument:
         return 0.10
-    if "BTC" in instrument:  # Bitcoin CFD
+    if "BTC" in instrument:
         return 1.0
     return 0.0001

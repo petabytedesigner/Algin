@@ -32,7 +32,7 @@ class StrategySignal:
 
 
 class Strategy:
-    """Bërthama e logjikës së sinjalit për robotin V10.
+    """Bërthama e logjikës së sinjalit për robotin Algin.
 
     Kombinon:
     - Strukturën (BOS / CHoCH)

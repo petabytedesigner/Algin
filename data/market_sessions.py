@@ -3,7 +3,7 @@ import datetime as dt
 from typing import Optional
 
 class MarketSessions:
-    """Menaxhon sesionet kryesore të tregtimit për V10.
+    """Menaxhon sesionet kryesore të tregtimit për Algin.
 
     Qëllimi:
     - Kontrollon nëse jemi brenda një sesioni aktiv.

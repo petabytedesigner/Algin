@@ -33,7 +33,7 @@ class ScoringConfig:
 
 
 class ScoringEngine:
-    """Motor i pikëzimit të sinjaleve për V10.
+    """Motor i pikëzimit të sinjaleve për Algin.
 
     Kjo klasë nuk vendos vetë nëse sinjali është valid – thjesht jep një
     score numerik 0–100 bazuar në input-in që vjen nga strategy.

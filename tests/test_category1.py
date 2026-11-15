@@ -153,6 +153,14 @@ class Category1Tests(unittest.TestCase):
             self.assertEqual(main.scan_once(), 0)
             data.assert_not_called()
 
+    def test_standard_indicator_class_name(self):
+        from utils.indicators import Indicators
+        indicator = Indicators()
+        self.assertTrue(callable(indicator.ema))
+        self.assertFalse(hasattr(importlib.import_module("utils.indicators"),
+                                 "IndicatorsV10"))
+
+
 
 if __name__ == "__main__":
     unittest.main()

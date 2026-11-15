@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 import datetime as _dt
 
 class NewsFilter:
-    """Filtri i lajmeve për robotin V10.
+    """Filtri i lajmeve për robotin Algin.
 
     Që bën:
     - Merr listën e lajmeve nga ForexFactory API ose burimi yt i integruar.

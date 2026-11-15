@@ -19,7 +19,7 @@ class StructureResult:
 class StructureEngine:
     """Detekton BOS, CHoCH dhe strukturën e trendit sipas logjikës institucionale.
 
-    ROBOTI V10:
+    ROBOTI Algin:
     - BOS kërkon body close, jo wick.
     - CHoCH kërkon body close kundër trendit.
     - Strukturë e pastër (clean structure) rrit score.
