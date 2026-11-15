@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from broker.oanda_client import timestamp
+from broker.oanda_client import BrokerError, timestamp
 
 
 class NewsGuard:
@@ -57,7 +57,7 @@ class NewsGuard:
             self._snapshot = parsed
             self._cached_at = now
             return parsed
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, BrokerError) as exc:
             self._snapshot = None
             self._cached_at = None
             raise ValueError("Unverified economic calendar") from exc
