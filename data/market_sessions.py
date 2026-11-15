@@ -3,7 +3,7 @@ import datetime as dt
 from typing import Optional
 
 class MarketSessions:
-    """Menaxhon sesionet kryesore të tregtimit për V10.
+    """Menaxhon sesionet kryesore të tregtimit për Algin.
 
     Qëllimi:
     - Kontrollon nëse jemi brenda një sesioni aktiv.
@@ -17,7 +17,7 @@ class MarketSessions:
     """
 
     def __init__(self):
-        # Mund të bëhen dinamike nga config_v10 nëse do
+        # Mund të bëhen dinamike nga config nëse do
         self.asia_start  = dt.time(23, 0)
         self.asia_end    = dt.time(6, 0)
         self.london_start = dt.time(7, 0)
@@ -39,7 +39,7 @@ class MarketSessions:
 
     def active_session(self, now: Optional[dt.datetime] = None) -> Optional[str]:
         if now is None:
-            now = dt.datetime.utcnow()
+            now = dt.datetime.now(dt.timezone.utc)
 
         if self._in_range(now, self.asia_start, self.asia_end):
             return "Asia"

@@ -10,7 +10,7 @@ class RetestResult:
     retest_price: Optional[float]
 
 class RetestEngine:
-    """Logjika institucionale e Break & Retest për V10.
+    """Logjika institucionale e Break & Retest për Algin.
 
     Rregullat tona:
     - Retest kërkon prekjen e ZONËS me TRUP ose wick të shkurtër.

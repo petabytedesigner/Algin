@@ -8,7 +8,7 @@ from typing import Dict, Any
 class ScoringConfig:
     """Konfigurim për sistemin e pikëzimit të sinjaleve.
 
-    Vlerat reale do vijnë nga config_v10.py; këtu ruajmë vetëm strukturën.
+    Vlerat reale do vijnë nga config.py; këtu ruajmë vetëm strukturën.
     Ideja:
     - çdo komponent i sinjalit (trend, strukturë, candle, ATR, etj.)
       jep një numër pikësh.
@@ -33,12 +33,12 @@ class ScoringConfig:
 
 
 class ScoringEngine:
-    """Motor i pikëzimit të sinjaleve për V10.
+    """Motor i pikëzimit të sinjaleve për Algin.
 
     Kjo klasë nuk vendos vetë nëse sinjali është valid – thjesht jep një
-    score numerik 0–100 bazuar në input-in që vjen nga strategy_v10.
+    score numerik 0–100 bazuar në input-in që vjen nga strategy.
 
-    strategy_v10 duhet t'i përgatisë metrikat në formën e një dictionary:
+    strategy duhet t'i përgatisë metrikat në formën e një dictionary:
 
         metrics = {
             "trend_strength": 0.0–1.0,

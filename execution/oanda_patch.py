@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-"""oanda_patch_v10
+"""Read-only compatibility wrappers for OANDA REST v20.
 
-Shtresë abstraksioni për thirrjet kryesore te OANDA, e përditësuar
-për V10 në mënyrë që:
+Shtresë abstraksioni për thirrjet kryesore te OANDA, në mënyrë që:
 
-- të përdorë vetëm endpoint-et aktuale të OANDA v20 (pricing, orders, trades, account);
+- të ruajë formatet e dokumentuara të OANDA v20 për leximet;
 - të centralizojë logjikën e leximit të përgjigjeve (p.sh. tradeID, errors);
 - të jetë i lehtë për t'u përditësuar nëse OANDA bën ndryshime në të ardhmen.
 
-Ideja: pjesa tjetër e robotit (utils_v10, trade_executor_v10, data_handler_v10)
+Ideja: pjesa tjetër e robotit (common, trade_executor, data_handler)
 mund të përdorë këtu funksione më të larta pa u shqetësuar për formatin e saktë
 të JSON-it të OANDA.
 """
 
 from typing import Any, Dict, List, Optional
 
-import config_v10 as config
-from utils.utils_v10 import log, safe_request
+import config as config
+from utils.common import log, safe_request
 
 
 # -------------------------------------------------------------
@@ -46,7 +45,7 @@ def get_open_trades_raw() -> Optional[Dict[str, Any]]:
     """Wrapper mbi /openTrades.
 
     Kthehet JSON-i i plotë, pa u transformuar.
-    Përdoret nga safety_check, partial_close, etj.
+    Kjo ndërfaqe e vjetër nuk përdoret nga rrjedha kryesore.
     """
     url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/openTrades"
     headers = {"Authorization": f"Bearer {config.API_KEY}"}
@@ -81,35 +80,21 @@ def get_open_positions_raw() -> Optional[Dict[str, Any]]:
 # -------------------------------------------------------------
 
 def extract_trade_id_from_order_response(data: Dict[str, Any]) -> Optional[str]:
-    """Përpiqet të nxjerrë tradeID nga një përgjigje order-i OANDA.
+    """Read only orderFillTransaction.tradeOpened.tradeID.
 
-    OANDA mund të kthejë:
-    - orderFillTransaction.tradeOpened.tradeID
-    - orderFillTransaction.tradesOpened[0].tradeID
-    - orderFillTransaction.id (si fallback)
-    Kemi këtë funksion që ta centralizojmë logjikën.
+    A transaction ID, order ID or tradeReduced ID is never an opened trade.
+    Unknown shapes remain unresolved until Category 3 reconciliation.
     """
-    try:
-        tx = data.get("orderFillTransaction") or data.get("orderCreateTransaction")
-        if not tx:
-            return None
-
-        if "tradeOpened" in tx and tx["tradeOpened"]:
-            return tx["tradeOpened"].get("tradeID")
-
-        trades_opened = tx.get("tradesOpened")
-        if trades_opened:
-            first = trades_opened[0]
-            if isinstance(first, dict):
-                tid = first.get("tradeID") or first.get("id")
-                if tid:
-                    return tid
-
-        # Fallback – jo ideal, por ndodh ndonjëherë që vetëm id e tranzaksionit ekziston
-        return tx.get("id")
-    except Exception as e:
-        log(f"⚠️ extract_trade_id_from_order_response exception: {e}")
+    if not isinstance(data, dict):
         return None
+    fill = data.get("orderFillTransaction")
+    if not isinstance(fill, dict):
+        return None
+    trade = fill.get("tradeOpened")
+    if not isinstance(trade, dict):
+        return None
+    trade_id = trade.get("tradeID")
+    return str(trade_id) if isinstance(trade_id, str) and trade_id else None
 
 
 def extract_error_message(data: Dict[str, Any]) -> str:
@@ -171,7 +156,7 @@ def get_candles_raw(
     - granularity: M1, M5, M15, H1, H4, D, etj.
     - price_type: M (mid), B (bid), A (ask)
     """
-    url = f"{config.OANDA_URL}/instruments/{instrument}/candles"
+    url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/instruments/{instrument}/candles"
     headers = {"Authorization": f"Bearer {config.API_KEY}"}
     params = {
         "granularity": granularity,

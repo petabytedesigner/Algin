@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
+from utils.time_tools import require_utc, utc_now
 
 
 class Grade(str, Enum):
@@ -50,7 +51,7 @@ class RiskConfig:
     """Konfigurim fleksibël për risk engine.
 
     Këtu vendosen limitet e ekspozimit, risk për grade, cooldown, etj.
-    Në praktikë këto vlera do vijnë nga config_v10.py, por i mbajmë
+    Në praktikë këto vlera do vijnë nga config.py, por i mbajmë
     këtu në një strukturë të vetëm për t'i kaluar lehtësisht në RiskEngine.
     """
     max_total_risk_pct: float = 6.0  # limiti total (p.sh. 6%)
@@ -225,7 +226,7 @@ class RiskEngine:
 
         Përdoret për të futur instrumentin në cooldown.
         """
-        when = when or datetime.utcnow()
+        when = require_utc(when or utc_now())
         state = self._instrument_state.get(instrument) or InstrumentRiskState()
         state.last_loss_at = when
         self._instrument_state[instrument] = state
@@ -248,10 +249,11 @@ class RiskEngine:
 
     def _is_in_cooldown(self, instrument: str, now: datetime) -> bool:
         cfg = self.config
+        require_utc(now)
         state = self._instrument_state.get(instrument)
         if not state or not state.last_loss_at:
             return False
 
-        return now < state.last_loss_at + timedelta(
+        return require_utc(now) < require_utc(state.last_loss_at) + timedelta(
             minutes=cfg.cooldown_minutes_after_loss
         )

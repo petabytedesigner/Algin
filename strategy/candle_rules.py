@@ -10,7 +10,7 @@ class CandleQualityResult:
     reason: str
 
 class CandleRules:
-    """Analiza profesionale e qirinjve për V10.
+    """Analiza profesionale e qirinjve për Algin.
 
     - body_ratio ≥ 50%   → qiri i fortë (strong candle)
     - body_ratio < 20%   → doji / pa fuqi

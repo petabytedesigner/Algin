@@ -1,11 +1,11 @@
 from __future__ import annotations
-import config_v10 as config
-from utils.utils_v10 import safe_request, log
+import config as config
+from utils.common import safe_request, log
 from typing import Optional, Dict, Any, List
 
-class DataHandlerV10:
+class DataHandler:
     """Merr candles, pricing dhe të dhëna të tjera nga OANDA.
-    I përdor strategy dhe main_v10.
+    I përdor strategy dhe main.
     """
 
     def __init__(self):
@@ -14,7 +14,7 @@ class DataHandlerV10:
         self.api_key=config.API_KEY
 
     def get_candles(self,instrument:str,granularity:str="M15",count:int=200)->Optional[List[Dict[str,Any]]]:
-        url=f"{self.base_url}/instruments/{instrument}/candles"
+        url=f"{self.base_url}/accounts/{self.account_id}/instruments/{instrument}/candles"
         headers={"Authorization":f"Bearer {self.api_key}"}
         params={"granularity":granularity,"count":str(count),"price":"M"}
         r=safe_request("GET",url,headers=headers,params=params)

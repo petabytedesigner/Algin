@@ -14,7 +14,7 @@ class TrendConfig:
     max_ema_distance_atr: float = 1.5  # nëse çmimi është më larg se kaq × ATR nga EMA20 → overextended
 
 class TrendEngine:
-    """Motor trendi për V10 bazuar në EMA20/50 dhe ATR.
+    """Motor trendi për Algin bazuar në EMA20/50 dhe ATR.
 
     Rregullat tona:
     - Trend bazë: orientimi i EMA20 ndaj EMA50.

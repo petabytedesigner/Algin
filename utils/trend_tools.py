@@ -6,11 +6,11 @@ from typing import Dict, Any, List
 #
 #  Funksione ndihmëse për trend-in që përdoren nga:
 #  - trend_engine
-#  - strategy_v10
+#  - strategy
 #  - scoring_engine
 # ------------------------------------------------------
 
-class TrendToolsV10:
+class TrendTools:
 
     # -----------------------------
     #  Llogarit pjerrësinë (slope)
