@@ -518,5 +518,50 @@ class NewsTests(unittest.TestCase):
 
 
 
+    def test_P43_CHoCH_when_close_reverses_prior_downtrend(self):
+        sample = []
+        for i in range(20):
+            sample.append({"high": 1.1000, "low": 1.0900, "close": 1.0950})
+        sample[5]["high"] = 1.1050
+        sample[10]["high"] = 1.1030
+        sample[7]["low"] = 1.0880
+        sample[13]["low"] = 1.0860
+        sample[19]["high"] = 1.1045
+        sample[19]["close"] = 1.1040
+        result = StructureEngine().detect(sample)
+        self.assertTrue(result.bos)
+        self.assertTrue(result.choch)
+        self.assertEqual(result.direction, "UP")
+        wick_only = [dict(c) for c in sample]
+        wick_only[-1]["close"] = 1.1029
+        self.assertFalse(StructureEngine().detect(wick_only).bos)
+
+    def test_P54_DataHandler_requires_fresh_tradeable_OANDA_price(self):
+        payload = {"prices": [{
+            "instrument": "EUR_USD", "tradeable": True,
+            "time": iso_utc(NOW),
+            "bids": [{"price": "1.1000"}],
+            "asks": [{"price": "1.1002"}]
+        }]}
+        with (
+            patch.object(config, "API_KEY", "dummy"),
+            patch.object(config, "ACCOUNT_ID", "acct"),
+            patch("data.data_handler.utc_now", return_value=NOW),
+            patch("data.data_handler.safe_request", return_value=Response(payload)),
+        ):
+            service = DataHandler()
+            self.assertEqual(service.get_price("EUR_USD")["bid"], 1.1)
+            payload["prices"][0]["tradeable"] = False
+            self.assertIsNone(service.get_price("EUR_USD"))
+            payload["prices"][0]["tradeable"] = True
+            payload["prices"][0]["time"] = iso_utc(
+                NOW - timedelta(minutes=2)
+            )
+            self.assertIsNone(service.get_price("EUR_USD"))
+            payload["prices"][0]["time"] = iso_utc(NOW)
+            payload["prices"][0]["asks"][0]["price"] = "1.0999"
+            self.assertIsNone(service.get_price("EUR_USD"))
+
+
 if __name__ == "__main__":
     unittest.main()
