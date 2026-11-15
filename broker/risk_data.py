@@ -149,7 +149,12 @@ def get_quote_conversions(instrument: str, account_currency: str) -> QuoteConver
         prices = [p for p in raw_prices if (
             isinstance(p, dict) and p.get("instrument") == instrument
         )]
-        if len(prices) != 1 or prices[0].get("tradeable") is not True:
+        if len(prices) != 1 or not (
+            (prices[0].get("status") == "tradeable"
+             and prices[0].get("tradeable", True) is not False)
+            if "status" in prices[0]
+            else prices[0].get("tradeable") is True
+        ):
             raise PlanRejected("Price missing, ambiguous or not tradeable")
         quote = prices[0]
         base, home_quote = instrument.split("_", 1)

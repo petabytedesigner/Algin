@@ -36,7 +36,9 @@ NEWS_LOCKOUT_MINUTES_BEFORE = 30
 NEWS_LOCKOUT_MINUTES_AFTER = 30
 ENABLE_SESSIONS = True
 MIN_DISTANCE_PIPS = 3
+# Read-only preflight; limit from verified historical FX spread scans.
 SLIPPAGE_ALLOWED = 2
+MAX_SPREAD_PIPS = 2.5
 
 CSV_ENABLED = True
 CSV_PATH = "csv"

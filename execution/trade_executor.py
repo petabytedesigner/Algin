@@ -106,7 +106,12 @@ class TradeExecutor:
                 p for p in prices
                 if isinstance(p, dict) and p.get("instrument") == instrument
             ]
-            if len(matches) != 1 or matches[0].get("tradeable") is not True:
+            if len(matches) != 1 or not (
+                (matches[0].get("status") == "tradeable"
+                 and matches[0].get("tradeable", True) is not False)
+                if "status" in matches[0]
+                else matches[0].get("tradeable") is True
+            ):
                 raise ValueError("Untradeable, missing or duplicated quote")
             bid = float(matches[0]["bids"][0]["price"])
             ask = float(matches[0]["asks"][0]["price"])
