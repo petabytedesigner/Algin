@@ -25,8 +25,10 @@ Secrets are never stored in Git. `.env.example` is documentation only.
 Grade A 1.0%, Grade B 0.5%; total reserved exposure 1.0% of conservative
 NAV/balance; at most 3 open/pending intents and no duplicate/hedged
 instrument. Stop 1.5×ATR or at least 3 OANDA pips, TP >= 3R. Margin cap
-50% of available margin. Lock new entries after 3 consecutive losses or 5%
-drawdown. These explicit values are in `config.py` and can be reviewed
+50% of available margin. Lock new entries after 3 consecutive losses, 2% verified daily realized
+loss, or 5% drawdown. A configurable shared-currency risk cap limits
+correlated USD/JPY/etc. exposure. Broker-external structure support/resistance
+may widen ATR stops; an unverified structure level is never invented. These explicit values are in `config.py` and can be reviewed
 before deployment; they are not changed automatically by grade/scoring.
 
 `risk/trade_plan.py` is a pure planning engine with Decimal arithmetic,

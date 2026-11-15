@@ -66,6 +66,8 @@ def build_risk_policy() -> RiskPolicy:
         grade_b_pct=Decimal(str(config.RISK_GRADE_B_PCT)),
         max_total_risk_pct=Decimal(str(config.MAX_TOTAL_RISK_PCT)),
         max_instrument_risk_pct=Decimal(str(config.MAX_INSTRUMENT_RISK_PCT)),
+        max_currency_risk_pct=Decimal(str(config.MAX_CURRENCY_RISK_PCT)),
+        max_daily_loss_pct=Decimal(str(config.MAX_DAILY_LOSS_PCT)),
         max_trades_grade_a=config.MAX_TRADES_GRADE_A,
         max_trades_grade_b=config.MAX_TRADES_GRADE_B,
         max_active_trades=config.MAX_ACTIVE_TRADES,
@@ -79,14 +81,15 @@ def build_risk_policy() -> RiskPolicy:
     )
 
 
-def build_trade_plan(signal, atr, account, instrument, quote, exposure, losses, *, now):
+def build_trade_plan(signal, atr, account, instrument, quote, exposure, losses, *, now, structure_level=None):
     """P5: bridge a strategy signal to a fully validated preview-only plan.
 
     The caller must supply reconciled exposure and verified loss-history inputs.
     The category-1 observation loop does not fabricate these attestations.
     """
     return TradePlanner(build_risk_policy()).plan(
-        signal, atr, account, instrument, quote, exposure, losses, now=now
+        signal, atr, account, instrument, quote, exposure, losses,
+        now=now, structure_level=structure_level
     )
 
 

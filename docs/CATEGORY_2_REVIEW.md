@@ -10,9 +10,10 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 - Maximum open/reserved intentions 3, with previous grade-specific caps (A 2, B 3).
 - One position per instrument; hedging disabled.
 - Conservative equity base = lower of account balance and NAV.
-- ATR stop multiple 1.5 and minimum 3 broker-defined pips, with reward/risk >= 3.
+- ATR stop multiple 1.5 and minimum 3 broker-defined pips, optionally widened by a verified structural support/resistance boundary, with reward/risk >= 3.
 - Maximum modeled margin consumption = 50% of available margin.
-- Entry lock after 3 consecutive losses or 5% drawdown from verified NAV peak.
+- Entry lock after 3 consecutive losses, 2% realized daily loss relative to verified day-start NAV, or 5% drawdown from verified NAV peak.
+- Shared-currency concentration cap 1% (configurable); correlated pairs are not assumed to offset.
 - All numbers above are provisional **risk policy**, explicitly configured in `config.py`; not a profitability claim.
 
 ## Exact coverage of category points
@@ -28,8 +29,8 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 | P14 | Broker instrument pipLocation, displayPrecision, tradeUnitsPrecision, min/max limits | CFDs with unverified contract multiplier blocked |
 | P15 | Round unit size *down*, then recalculate monetary loss and required margin | Margin remains an estimate; broker final authority |
 | P16 | Verified reservation book combines OPEN/PENDING/OUTCOME_UNKNOWN, including reserved risk and unsettled margin | Live journal and atomic recovery are Category 4; none are assumed absent |
-| P17 | Total count, grade count, concentration, duplicate instrument and hedging blocked | Portfolio correlation beyond same symbol not inferred |
-| P18 | Loss-streak, drawdown, instrument cooldown entry locks | Existing-position *management* belongs to Category 4; entry lock never orders liquidation |
+| P17 | Total count, grade count, common-currency concentration, duplicate instrument and hedging blocked | Portfolio correlation beyond same symbol not inferred |
+| P18 | Loss-streak, verified daily realized-loss, drawdown and instrument cooldown entry locks | Existing-position *management* belongs to Category 4; entry lock never orders liquidation |
 
 ## OANDA REST v20 source contracts
 
@@ -47,7 +48,7 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 
 The account, instruments and pricing are three **distinct GETs**: a successful set
 does not prove an atomic broker snapshot. This category refuses broker writes.
-Exposure and loss state must be **independently verified** and explicitly supplied
+Exposure and loss state (including day-start NAV and realized daily loss) must be **independently verified** and explicitly supplied
 by a future reconciliation component; tests use synthetic verified fixtures.
 No runtime path fabricates `verified=True` or assumes no ambiguous requests.
 Pending and outcome-unknown intentions must reserve both risk and **estimated
@@ -55,3 +56,8 @@ margin** before another plan is accepted. Missing reservations block planning.
 
 After reviewing CI, only user approval allows merging this entire category.
 Do not describe a unit plan as an executable order or guaranteed worst-case loss.
+
+A missing structural level permits an **ATR-only preview**; whether the level
+is legitimate and whether the final stop meets all broker restrictions require
+Category 5 structural validation and Category 3 order validation. No live order
+is permitted in this category.

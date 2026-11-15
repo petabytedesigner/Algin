@@ -41,7 +41,8 @@ def case(*, direction="LONG", grade="A", kind="CURRENCY",
          balance="10000", nav="10000", margin="8000",
          reserved=(), open_count=0, pending_count=0,
          verified=True, uncertain=True, loss_verified=True,
-         losses=0, peak="10000", instrument="EUR_USD"):
+         losses=0, peak="10000", daily_loss="0",
+         day_start_nav="10000", instrument="EUR_USD"):
     sig = SimpleNamespace(
         instrument=instrument, direction=direction, grade=grade,
         score=85, timestamp=NOW
@@ -62,7 +63,11 @@ def case(*, direction="LONG", grade="A", kind="CURRENCY",
         "acct-1", tuple(reserved), verified=verified,
         uncertain_outcomes_accounted=uncertain
     )
-    status = LossState(D(peak), losses, loss_verified)
+    status = LossState(
+        D(peak), losses, loss_verified,
+        day_start_nav=D(day_start_nav),
+        daily_realized_loss_home=D(daily_loss),
+    )
     return sig, acct, spec, quote, book, status
 
 
@@ -323,6 +328,74 @@ class TradePlanningTests(unittest.TestCase):
             sig, "0.0010", acct, instrument, quote, book, losses, now=NOW
         )
         self.assertGreater(result.units, 0)
+
+
+
+    def test_P17_shared_currency_concentration_is_configurable(self):
+        policy = RiskPolicy(max_currency_risk_pct=D("0.75"))
+        pending = reserved("prior-gbp", "GBP_USD", grade="B", risk="0.5", margin="100")
+        sig, acct, spec, quote, book, losses = case(
+            grade="B", reserved=(pending,), pending_count=1
+        )
+        with self.assertRaises(PlanRejected):
+            TradePlanner(policy).plan(
+                sig, D("0.0010"), acct, spec, quote, book, losses, now=NOW
+            )
+        # AUD_CAD shares neither GBP nor USD, so the same booked risk is
+        # within the currency concentration cap.
+        sig, acct, spec, quote, book, losses = case(
+            instrument="AUD_CAD", grade="B",
+            reserved=(pending,), pending_count=1
+        )
+        different = TradePlanner(policy).plan(
+            sig, D("0.0010"), acct, spec, quote, book, losses, now=NOW
+        )
+        self.assertEqual(different.instrument, "AUD_CAD")
+
+    def test_P18_daily_loss_lock(self):
+        with self.assertRaises(PlanRejected):
+            plan(daily_loss="200", day_start_nav="10000")
+        self.assertGreater(
+            plan(daily_loss="199", day_start_nav="10000").units, 0
+        )
+        with self.assertRaises(PlanRejected):
+            LossState(D("10000"), 0, True)
+        with self.assertRaises(PlanRejected):
+            LossState(
+                D("10000"), 0, True,
+                day_start_nav=D("10000"),
+                daily_realized_loss_home=D("-1")
+            )
+
+    def test_P13_verified_structure_level_widens_stop(self):
+        inputs = case()
+        a = TradePlanner().plan(*(
+            inputs[0], D("0.0010"), *inputs[1:]
+        ), now=NOW)
+        b = TradePlanner().plan(*(
+            inputs[0], D("0.0010"), *inputs[1:]
+        ), now=NOW, structure_level="1.0950")
+        self.assertLess(b.stop_loss, a.stop_loss)
+        self.assertLess(b.units, a.units)
+        self.assertEqual(b.stop_basis, "ATR+STRUCTURE")
+
+        sig, acct, spec, quote, book, loss = case(direction="SHORT")
+        short = TradePlanner().plan(
+            sig, D("0.0010"), acct, spec, quote, book, loss,
+            now=NOW, structure_level="1.1050"
+        )
+        self.assertGreater(short.stop_loss, D("1.1050"))
+        self.assertLess(short.units, 0)
+
+    def test_P13_wrong_structure_boundary_fails_closed(self):
+        sig, acct, spec, quote, book, loss = case()
+        for invalid in ("1.2", "NaN", "0"):
+            with self.subTest(level=invalid):
+                with self.assertRaises(PlanRejected):
+                    TradePlanner().plan(
+                        sig, D("0.0010"), acct, spec, quote, book, loss,
+                        now=NOW, structure_level=invalid
+                    )
 
 
 

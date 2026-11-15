@@ -41,6 +41,8 @@ class RiskPolicy:
     grade_b_pct: Decimal = Decimal("0.5")
     max_total_risk_pct: Decimal = Decimal("1.0")
     max_instrument_risk_pct: Decimal = Decimal("1.0")
+    max_currency_risk_pct: Decimal = Decimal("1.0")
+    max_daily_loss_pct: Decimal = Decimal("2.0")
     max_trades_grade_a: int = 2
     max_trades_grade_b: int = 3
     max_active_trades: int = 3
@@ -57,7 +59,8 @@ class RiskPolicy:
     def __post_init__(self):
         for name in (
             "grade_a_pct", "grade_b_pct", "max_total_risk_pct",
-            "max_instrument_risk_pct", "max_drawdown_pct",
+            "max_instrument_risk_pct", "max_currency_risk_pct",
+            "max_drawdown_pct", "max_daily_loss_pct",
             "reward_to_risk", "atr_stop_multiple", "max_margin_fraction",
         ):
             value = number(getattr(self, name), name, positive=True)
@@ -221,6 +224,8 @@ class ExposureReservation:
     def __post_init__(self):
         if not self.reservation_id or not self.instrument:
             raise PlanRejected("Unidentified exposure reservation")
+        if self.instrument.count("_") != 1 or not all(self.instrument.split("_")):
+            raise PlanRejected("Invalid reservation instrument format")
         if self.direction not in ("LONG", "SHORT") or self.grade not in ("A", "B"):
             raise PlanRejected("Invalid reserved exposure attributes")
         if self.status not in ("OPEN", "PENDING", "OUTCOME_UNKNOWN"):
@@ -267,11 +272,27 @@ class LossState:
     consecutive_losses: int
     verified: bool = False
     cooldown_until_by_instrument: Mapping[str, datetime] = field(default_factory=dict)
+    day_start_nav: Optional[Decimal] = None
+    daily_realized_loss_home: Optional[Decimal] = None
 
     def __post_init__(self):
         object.__setattr__(
             self, "peak_nav", number(self.peak_nav, "peak_nav", positive=True)
         )
+        if self.verified and (
+            self.day_start_nav is None or self.daily_realized_loss_home is None
+        ):
+            raise PlanRejected("Verified daily loss state missing")
+        if self.day_start_nav is not None:
+            object.__setattr__(
+                self, "day_start_nav",
+                number(self.day_start_nav, "day_start_nav", positive=True)
+            )
+        if self.daily_realized_loss_home is not None:
+            loss = number(self.daily_realized_loss_home, "daily_realized_loss_home")
+            if loss < 0:
+                raise PlanRejected("Daily realized loss must be nonnegative")
+            object.__setattr__(self, "daily_realized_loss_home", loss)
         if isinstance(self.consecutive_losses, bool) or (
             not isinstance(self.consecutive_losses, int)
             or self.consecutive_losses < 0
@@ -299,6 +320,7 @@ class TradePlan:
     reward_to_risk: Decimal
     account_currency: str
     quote_timestamp: datetime
+    stop_basis: str = "ATR"
     preview_only: bool = True
 
 
@@ -309,7 +331,7 @@ class TradePlanner:
     def plan(
         self, signal, atr, account: AccountFunds, instrument: InstrumentRules,
         quote: QuoteConversions, exposure: ExposureBook, losses: LossState,
-        *, now: datetime
+        *, now: datetime, structure_level=None
     ) -> TradePlan:
         """P5/P9–P18: build a fail-closed, unit-quantized proposal."""
         policy = self.policy
@@ -344,6 +366,13 @@ class TradePlanner:
             raise PlanRejected("No available margin")
         if losses.consecutive_losses >= policy.max_consecutive_losses:
             raise PlanRejected("Loss-streak entry lock")
+        if losses.day_start_nav is None or losses.daily_realized_loss_home is None:
+            raise PlanRejected("Unknown daily loss state")
+        daily_loss_pct = (
+            losses.daily_realized_loss_home / losses.day_start_nav * Decimal("100")
+        )
+        if daily_loss_pct >= policy.max_daily_loss_pct:
+            raise PlanRejected("Daily realized-loss entry lock")
         peak = number(losses.peak_nav, "peak_nav", positive=True)
         drawdown_pct = max(Decimal("0"), (peak - account.nav) / peak * 100)
         if drawdown_pct >= policy.max_drawdown_pct:
@@ -377,6 +406,19 @@ class TradePlanner:
             raise PlanRejected("Total reserved risk cap")
         if instrument_pct + grade_pct > policy.max_instrument_risk_pct:
             raise PlanRejected("Instrument risk concentration")
+        # Conservative correlated-currency exposure: count any shared currency,
+        # without making unverified netting assumptions about BUY/SELL.
+        candidate_currencies = set(instrument.instrument.split("_"))
+        for currency in candidate_currencies:
+            reserved_currency_pct = sum(
+                (
+                    r.risk_pct for r in reservations
+                    if currency in r.instrument.split("_")
+                ),
+                Decimal("0"),
+            )
+            if reserved_currency_pct + grade_pct > policy.max_currency_risk_pct:
+                raise PlanRejected(f"Currency risk concentration: {currency}")
 
         # Retain the existing RiskEngine public decision contract.
         risk = RiskEngine(RiskConfig(
@@ -410,6 +452,20 @@ class TradePlanner:
             atr_value * policy.atr_stop_multiple,
             instrument.pip_size * policy.minimum_stop_pips,
         )
+        stop_basis = "ATR"
+        if structure_level is not None:
+            boundary = number(structure_level, "structure_level", positive=True)
+            # The supplied boundary is a separately verified support/resistance
+            # level, not a level inferred from the current incomplete candle.
+            if signal.direction == "LONG":
+                if boundary >= price:
+                    raise PlanRejected("LONG structure support must be below entry")
+                distance = max(distance, price - boundary + instrument.pip_size)
+            else:
+                if boundary <= price:
+                    raise PlanRejected("SHORT structure resistance must be above entry")
+                distance = max(distance, boundary - price + instrument.pip_size)
+            stop_basis = "ATR+STRUCTURE"
         step = instrument.price_step
         if signal.direction == "LONG":
             stop = (price - distance).quantize(step, rounding=ROUND_FLOOR)
@@ -480,5 +536,5 @@ class TradePlanner:
             computed_risk_home=actual_loss, computed_risk_pct=risk_pct,
             reserved_risk_pct=grade_pct, estimated_margin_home=margin,
             reward_to_risk=actual_rr, account_currency=account.currency,
-            quote_timestamp=quote.timestamp,
+            quote_timestamp=quote.timestamp, stop_basis=stop_basis,
         )
