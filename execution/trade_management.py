@@ -115,6 +115,37 @@ class TradeManagement:
                 "broker_write_attempted": False}
 
 
+    def mark_unknown(self, trade_id, *, operation, phase=None):
+        """Persist ambiguous BE/partial outcome without automatic re-submission.
+
+        Called only after an ambiguous mutation transport result in a future,
+        separately activated broker-write implementation.
+        """
+        if not self.reconciler._active:
+            raise ReconcileError("Process-wide account lease required")
+        if operation not in ("BE", "PARTIAL"):
+            raise LifecycleError("Unknown management operation")
+        def mutate(state):
+            if trade_id not in state["trades"]:
+                raise LifecycleError("Unknown trade")
+            trade = TradeRecord.from_dict(state["trades"][trade_id])
+            if operation == "BE":
+                if trade.be_state != "INTENT":
+                    raise LifecycleError("No outstanding BE intent")
+                trade = replace(trade, be_state="UNKNOWN")
+            else:
+                if phase not in trade.partial_phases or (
+                    trade.partial_phases[phase]["state"] != "INTENT"
+                ):
+                    raise LifecycleError("No outstanding partial intent")
+                new_phases = dict(trade.partial_phases)
+                new_phases[phase] = dict(new_phases[phase], state="UNKNOWN")
+                trade = replace(trade, partial_phases=new_phases)
+            state["trades"][trade_id] = trade.to_dict()
+        return self.reconciler.store.mutate(mutate)
+
+
+
 class ManagementLoop:
     """Read-only recovery/monitoring always runs irrespective of entry session."""
 

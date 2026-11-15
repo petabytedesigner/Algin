@@ -96,6 +96,9 @@ class AccountReconciler:
                 raise ReconcileError("Duplicate broker open trade IDs")
             if len({o.get("id") for o in orders}) != len(orders):
                 raise ReconcileError("Duplicate broker pending order IDs")
+            for order in orders:
+                if not _txid(order.get("id")):
+                    raise ReconcileError("Invalid pending order ID")
             for trade in trades:
                 if not _txid(trade.get("id")) or trade.get("state", "OPEN") != "OPEN":
                     raise ReconcileError("Invalid open trade in broker snapshot")
@@ -216,9 +219,10 @@ class AccountReconciler:
                         close_transaction_ids=trade.close_transaction_ids + (tid,)
                     )
                     if is_closed:
-                        if tid in state["counted_closures"]:
-                            raise ReconcileError("Previously counted closure reappeared")
-                        state["counted_closures"].append(tid)
+                        # One ORDER_FILL can close several trades. Count each
+                        # trade once, and each enclosing transaction once.
+                        if tid not in state["counted_closures"]:
+                            state["counted_closures"].append(tid)
                         if trade_id in state["closed_results"]:
                             raise ReconcileError("Duplicate trade result counting")
                         trade = replace(trade, result_counted=True)
@@ -299,10 +303,12 @@ class AccountReconciler:
                 continue
             rec = TradeRecord.from_dict(proposed["trades"][tid])
             entry = journal_by_id.get(rec.attempt_id)
+            ext = raw.get("clientExtensions")
             if (entry is None or entry.get("trade_id") != tid
                 or entry.get("status") != "FILLED"
-                or raw.get("clientExtensions", {}).get("id") != rec.attempt_id
-                or raw.get("clientExtensions", {}).get("tag") != "algin"
+                or not isinstance(ext, dict)
+                or ext.get("id") != rec.attempt_id
+                or ext.get("tag") != "algin"
                 or raw.get("instrument") != rec.instrument):
                 blockers.append("Trade ownership mismatch " + tid)
                 continue
@@ -329,6 +335,7 @@ class AccountReconciler:
                for v in proposed["trades"].values()):
             blockers.append("Unconfirmed BE/partial management operation")
         if cursor != persisted["cursor"]:
+            # Persist complete validated transaction state in one atomic commit.
             self.store.mutate(
                 lambda s: s.update(proposed),
                 expected_cursor=persisted["cursor"],

@@ -45,8 +45,10 @@ precedent scenarios; they are **not** proof that this version executes live.
   category at the lowest transport boundary, regardless of env/config flags.
 - --manage-once performs GET requests and may write local durable state but
   never mutates broker account state; --check makes no network requests.
-- main's perpetual loop now reconciles before checking entry-session hours.
+- main's perpetual loop holds one account-scoped lease for its entire lifetime
+  and reconciles before checking entry-session hours.
   The legacy --once scan is unchanged and is **observation-only**, not recovery.
+- Ambiguous BE/partial intent states are persisted as UNKNOWN and never resent.
 - BE/partial are previewed and may be staged as local durable intents in an
   isolated management API. Sending broker modifications is deferred to a
   separately authorized/verified operational release. A staged action must not
@@ -55,6 +57,8 @@ precedent scenarios; they are **not** proof that this version executes live.
   a confirmed fill, grade, filled units, initial SL/TP and exact broker trade
   ownership. Older partial history without a trustworthy local record is
   rejected, never silently reverse-engineered from the current SL.
+- One ORDER_FILL can close multiple known trades; each trade is counted once
+  while a shared transaction ID is recorded once.
 - No automatic deletion of a stale process lease, no automatic recovery from
   corrupted state, no auto-close and no retry of unknown broker operations.
 - The result/cooldown ledger is a durable *per-trade* ledger, not a substitute

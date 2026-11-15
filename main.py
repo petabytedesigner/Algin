@@ -1,7 +1,7 @@
 """Category-4 read-only entrypoint; broker mutations are not implemented here.
 
-Strategy and risk output is advisory. No order submission, SL/TP changes or
-partial close can be requested until later categories are verified.
+Strategy and risk output remains advisory. Break-even and partial-close
+intents may be prepared locally, but real broker mutations are disabled.
 """
 from __future__ import annotations
 
@@ -184,16 +184,26 @@ def main(argv=None) -> int:
         return manage_once()
     if args.once:
         return scan_once()
-    while True:
-        # P36: manage/reconcile even when new-entry session is closed.
-        # The legacy --once scan stays observation-only for compatibility.
-        management_status = manage_once()
-        if management_status:
-            return management_status
-        result = scan_once()
-        if result:
-            return result
-        time.sleep(60)
+    # Hold the account lease for the WHOLE running service lifetime.
+    # A second instance cannot interleave between scan cycles.
+    if not config.API_KEY or not config.ACCOUNT_ID:
+        LOG.error("OANDA Practice credentials required")
+        return 2
+    try:
+        with AccountReconciler(config.ACCOUNT_ID) as reconciler:
+            while True:
+                # P36: recovery before checking any entry-session constraint.
+                report = reconciler.run()
+                if report.blocked_reasons:
+                    LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
+                    return 3
+                result = scan_once()
+                if result:
+                    return result
+                time.sleep(60)
+    except (ReconcileError, StateError, JournalError, ValueError) as exc:
+        LOG.error("Management process stopped safely: %s", exc)
+        return 3
 
 
 if __name__ == "__main__":

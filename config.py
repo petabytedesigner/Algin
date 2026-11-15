@@ -9,7 +9,8 @@ import os
 API_KEY = os.getenv("OANDA_API_TOKEN", "")
 ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
 OANDA_URL = "https://api-fxpractice.oanda.com/v3"
-# No environment override: broker mutations require categories 2, 3 and 4.
+# No environment override: all real broker mutations remain disabled until
+# a separate explicitly reviewed operational release.
 ORDER_WRITES_ENABLED = False
 
 EMA_FAST = 20

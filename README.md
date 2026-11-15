@@ -1,4 +1,4 @@
-# Algin — development baseline: Categories 1–3
+# Algin — development baseline: Categories 1–4
 
 Categories 1 and 2 implement the foundation, read-only broker contracts and
 pure risk-based trade preparation. The active entrypoint remains **OBSERVE ONLY**.
@@ -66,3 +66,28 @@ verification. Both independent release and configuration gates block actual
 broker POST requests. The active main.py remains observation-only.
 Read docs/CATEGORY_3_REVIEW.md. Offline fixtures do not establish real Practice
 execution, restart reconciliation for an operational account, or trade safety.
+
+## Category 4 state and recovery (read-only OANDA)
+
+Run `python main.py --manage-once` with local Practice credentials to perform
+a full account read and conservative reconciliation of durable trading state.
+This makes GET calls and writes local checksummed/atomic records to `.local/`;
+it does **not** send a POST/PUT/PATCH to OANDA. The long-running main loop
+holds an exclusive per-account process lease and reconciles every cycle before
+the entry-session filter. An orphaned lock means inspect the previous process,
+journal and broker state manually; never blindly delete state or retry a
+request. Existing `--once` remains the legacy observation-only signal scan,
+not the recovery command.
+
+The lifecycle preserves original signed units, entry, original stop and risk
+distance, grade, BE/partial phase states, and one-time close/cooldown accounting.
+Directional R uses exit-side bid/ask and original risk. BE/partial can be
+previewed and staged locally but **real management orders remain disabled**.
+The initial account snapshot must match the same-account fill journal and
+broker trade ownership, or management rejects the trade. Older/incomplete
+trades are not adopted by guessing missing data. See
+[Category 4 review](docs/CATEGORY_4_REVIEW.md).
+
+Passing offline broker-fixture tests does not demonstrate account-wide live
+recovery, real slippage, or operational readiness. The system stays
+OBSERVE_ONLY pending separately authorized and verified broker-write release.

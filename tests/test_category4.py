@@ -534,5 +534,112 @@ class OperationalIntegrationTests(LifecycleFixture):
         fake_session.request.assert_not_called()
 
 
+    def test_P31_journal_unknown_freezes_entry_after_restart(self):
+        self.journal.begin(
+            signal_id="s-new", attempt_id="algin-unknown",
+            request={"order": {"instrument": "EUR_USD", "units": "10"}},
+            risk_pct="0.5", margin_home="10", grade="B"
+        )
+        self.journal.transition("algin-unknown", "IN_FLIGHT")
+        self.journal.transition("algin-unknown", "UNKNOWN")
+        with self.service:
+            report = self.service.run()
+        self.assertTrue(any("Ambiguous broker submission" in x
+                            for x in report.blocked_reasons))
+        self.assertFalse(report.entry_allowed)
+
+    def test_P31_invalid_pending_broker_order_id_blocks_state(self):
+        self.transport.orders = [{"instrument": "EUR_USD"}]
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        self.assertIsNone(self.store.load())
+
+    def test_P40_ONE_broker_transaction_can_close_two_known_trades(self):
+        self.bootstrap()
+        original = TradeRecord.from_dict(self.store.load()["trades"]["11"])
+        other = replace(
+            original, trade_id="12", attempt_id="algin-12",
+            instrument="GBP_USD"
+        )
+        self.store.mutate(
+            lambda state: state["trades"].update({"12": other.to_dict()})
+        )
+        self.transport.cursor = "101"
+        self.transport.trades = []
+        self.transport.transactions = [{
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "time": "2026-11-15T10:20:00Z",
+            "tradesClosed": [
+                {"tradeID": "11", "units": "-100", "realizedPL": "-15"},
+                {"tradeID": "12", "units": "-100", "realizedPL": "20"}
+            ]
+        }]
+        with self.service:
+            report = self.service.run()
+        self.assertEqual(set(report.new_closed_trade_ids), {"11", "12"})
+        state = self.store.load()
+        self.assertEqual(state["counted_closures"], ["101"])
+        self.assertEqual(set(state["closed_results"]), {"11", "12"})
+        self.assertEqual(state["cooldowns"], {
+            "EUR_USD": "2026-11-15T10:50:00Z"
+        })
+        with self.service:
+            self.assertEqual(self.service.run().new_closed_trade_ids, ())
+
+    def test_P38_BE_unknown_remains_reserved_and_is_not_retried(self):
+        self.bootstrap()
+        manager = TradeManagement(self.service)
+        with self.service:
+            manager.stage_break_even("11", self.rules,
+                                     bid="1.1030", ask="1.1032")
+            manager.mark_unknown("11", operation="BE")
+            self.assertEqual(
+                self.store.load()["trades"]["11"]["be_state"], "UNKNOWN"
+            )
+            with self.assertRaises(ReconcileError):
+                manager.stage_break_even("11", self.rules,
+                                         bid="1.1030", ask="1.1032")
+
+    def test_P39_partial_unknown_reservation_survives_restart(self):
+        self.bootstrap("SHORT")
+        manager = TradeManagement(self.service)
+        with self.service:
+            manager.stage_partial("11", self.rules,
+                                  bid="1.0975", ask="1.0977")
+            manager.mark_unknown("11", operation="PARTIAL", phase="phase1")
+        restarted = AccountReconciler(
+            "acct-1", transport=self.transport,
+            journal=IntentJournal("acct-1", directory=self.folder.name),
+            store=LifecycleStore("acct-1", directory=self.folder.name),
+            lease=ProcessLease("acct-1", directory=self.folder.name)
+        )
+        with restarted:
+            report = restarted.run()
+        self.assertTrue(report.blocked_reasons)
+        self.assertEqual(
+            restarted.store.load()["trades"]["11"]["partial_phases"]["phase1"]["state"],
+            "UNKNOWN"
+        )
+
+    def test_P35_perpetual_main_loop_holds_lease_through_scan(self):
+        self.bootstrap()
+        checks = []
+        def scan_under_lease():
+            checks.append(self.lease.path.exists())
+            return 7
+        with (
+            patch.object(config, "API_KEY", "dummy"),
+            patch.object(config, "ACCOUNT_ID", "acct-1"),
+            patch("main.AccountReconciler", return_value=self.service),
+            patch("main.scan_once", side_effect=scan_under_lease),
+        ):
+            result = main.main([])
+        self.assertEqual(result, 7)
+        self.assertEqual(checks, [True])
+        self.assertFalse(self.lease.path.exists())
+
+
+
 if __name__ == "__main__":
     unittest.main()
