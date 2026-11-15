@@ -63,8 +63,7 @@ class TradeExecutor:
         self._record(state, intent_id, "FILLED_UNVERIFIED", trade_id=trade_id)
         state["trades"][trade_id] = {
             "instrument": plan.instrument, "direction": plan.direction, "grade": grade,
-            "intent_id": intent_id, "entry": str(outcome["entry"] or plan.entry_hint),
-            "initial_units": str(outcome["units"] or plan.units),
+            "intent_id": intent_id, "entry": None, "initial_units": None,
             "initial_stop": str(plan.stop_loss), "stop": str(plan.stop_loss),
             "take_profit": str(plan.take_profit), "be_done": False, "partial_done": False,
             "risk_home": str(plan.risk_home), "risk_pct": str(plan.risk_pct),
@@ -73,11 +72,28 @@ class TradeExecutor:
         self.store.save(state)
         try:
             observed = self.client.trade(trade_id).get("trade")
-            if not isinstance(observed, dict) or not observed.get("stopLossOrder") or not observed.get("takeProfitOrder"):
-                raise BrokerError("Missing protective orders on broker trade")
-            if observed.get("state") != "OPEN":
-                raise BrokerError("Trade not open after submission")
-        except BrokerError:
+            if not isinstance(observed, dict) or observed.get("state") != "OPEN":
+                raise BrokerError("Trade missing or not open after fill")
+            actual_entry = number(observed.get("price"))
+            actual_units = number(observed.get("initialUnits"))
+            current_units = number(observed.get("currentUnits"))
+            stop = number((observed.get("stopLossOrder") or {}).get("price"))
+            target = number((observed.get("takeProfitOrder") or {}).get("price"))
+            client_id = (observed.get("clientExtensions") or {}).get("id")
+            if (observed.get("instrument") != plan.instrument or client_id != intent_id or
+                    actual_units != plan.units or current_units != plan.units or
+                    stop != plan.stop_loss or target != plan.take_profit):
+                raise BrokerError("Broker fill/ownership/protection differs from intended order")
+            if (plan.direction == "LONG" and not (stop < actual_entry < target and actual_entry <= plan.price_bound)):
+                raise BrokerError("LONG fill outside approved priceBound/stop/target")
+            if (plan.direction == "SHORT" and not (target < actual_entry < stop and actual_entry >= plan.price_bound)):
+                raise BrokerError("SHORT fill outside approved priceBound/stop/target")
+            state["trades"][trade_id]["entry"] = str(actual_entry)
+            state["trades"][trade_id]["initial_units"] = str(actual_units)
+            state["trades"][trade_id]["current_units"] = str(current_units)
+            state["trades"][trade_id]["protection"] = "CONFIRMED"
+            self.store.save(state)
+        except (BrokerError, KeyError, TypeError, ValueError):
             self._record(state, intent_id, "UNPROTECTED_OR_UNVERIFIED")
             self.events.emit("PROTECTION_UNKNOWN", instrument=plan.instrument, intent_id=intent_id, trade_id=trade_id)
             return {"status": "UNPROTECTED_OR_UNVERIFIED", "trade_id": trade_id}
@@ -108,7 +124,7 @@ class TradeExecutor:
         try:
             observed = self.client.trade(trade_id)["trade"]
             actual = number(observed["stopLossOrder"]["price"])
-            if actual != number(new_stop):
+            if not observed.get("takeProfitOrder") or actual != number(new_stop):
                 return "UNVERIFIED"
         except (BrokerError, KeyError, TypeError):
             return "UNVERIFIED"
@@ -144,7 +160,9 @@ class TradeExecutor:
         try:
             observed = self.client.trade(trade_id)["trade"]
             remaining = number(observed["currentUnits"])
-            if abs(remaining) != abs(prev) - requested:
+            if (observed.get("state") != "OPEN" or not observed.get("stopLossOrder") or
+                    not observed.get("takeProfitOrder") or
+                    remaining * prev <= 0 or abs(remaining) != abs(prev) - requested):
                 return "UNVERIFIED"
         except (BrokerError, KeyError, TypeError):
             return "UNVERIFIED"

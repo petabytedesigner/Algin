@@ -128,6 +128,12 @@ class SizingTests(unittest.TestCase):
         self.assertGreater(short.stop_loss, short.entry_hint)
         self.assertLess(short.take_profit, short.entry_hint)
 
+    def test_worst_case_pricebound_risk_capped(self):
+        plan = plan_for()
+        worst_case_loss = abs(plan.price_bound - plan.stop_loss) * abs(plan.units)
+        self.assertLessEqual(worst_case_loss, Decimal("50"))
+        self.assertEqual(plan.risk_home, worst_case_loss)
+
     def test_nonfinite_and_below_minimum_rejected(self):
         with self.assertRaises(BrokerError):
             plan_for(nav="NaN")
@@ -194,6 +200,53 @@ class JournalTests(unittest.TestCase):
             result = service.submit(store.initial(), plan_for(), "abcdef123456", "A")
             self.assertEqual(result["status"], "BLOCKED")
             self.assertEqual(client.calls, 0)
+
+
+
+class FillVerificationTests(unittest.TestCase):
+    def _client(self, plan, *, stop=None, missing_tp=False):
+        class Client:
+            writes = 0
+            def create_order(self, payload):
+                self.writes += 1
+                return {"orderFillTransaction": {
+                    "id": "1", "tradeOpened": {"tradeID": "123",
+                                              "price": str(plan.entry_hint), "units": str(plan.units)}}}
+            def trade(self, _trade_id):
+                value = {"id": "123", "state": "OPEN", "instrument": plan.instrument,
+                         "price": str(plan.entry_hint), "initialUnits": str(plan.units),
+                         "currentUnits": str(plan.units),
+                         "stopLossOrder": {"price": str(stop if stop is not None else plan.stop_loss)},
+                         "clientExtensions": {"id": TradeExecutor._safe_id("abcdef123456")}}
+                if not missing_tp:
+                    value["takeProfitOrder"] = {"price": str(plan.take_profit)}
+                return {"trade": value}
+        return Client()
+
+    def test_post_fill_account_readback_confirms(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = StateStore("demo", temp)
+            state = store.initial()
+            plan = plan_for()
+            client = self._client(plan)
+            result = TradeExecutor(client, store, FakeEvents(), True).submit(state, plan, "abcdef123456", "A")
+            self.assertEqual(result["status"], "CONFIRMED")
+            self.assertEqual(client.writes, 1)
+            self.assertEqual(state["trades"]["123"]["entry"], str(plan.entry_hint))
+
+    def test_missing_tp_or_mismatched_stop_is_unverified(self):
+        for altered in ("missing", "wrong_stop"):
+            with self.subTest(altered=altered), tempfile.TemporaryDirectory() as temp:
+                store = StateStore("demo", temp)
+                state = store.initial()
+                plan = plan_for()
+                client = self._client(plan,
+                                      stop="0.1" if altered == "wrong_stop" else None,
+                                      missing_tp=altered == "missing")
+                result = TradeExecutor(client, store, FakeEvents(), True).submit(
+                    state, plan, "abcdef123456", "A")
+                self.assertEqual(result["status"], "UNPROTECTED_OR_UNVERIFIED")
+                self.assertNotIn("CONFIRMED", [it["status"] for it in store.load()["intents"].values()])
 
 
 class CandleTests(unittest.TestCase):

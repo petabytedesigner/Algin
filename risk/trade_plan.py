@@ -111,10 +111,10 @@ def make_plan(*, instrument: str, direction: str, quote: dict, spec: dict,
         bound = (entry - slip * pip).quantize(tick, rounding=ROUND_HALF_UP)
     if not (stop < entry < target if direction == "LONG" else target < entry < stop):
         raise BrokerError("Invalid directional stop/target")
-    if bound <= 0 or abs(stop-entry) < number(min_distance_pips) * pip:
+    if bound <= 0 or (direction == 'LONG' and bound < entry) or (direction == 'SHORT' and bound > entry) or abs(stop-entry) < number(min_distance_pips) * pip:
         raise BrokerError("Rounded stop or priceBound invalid")
     budget = equity * qty_pct / Decimal(100)
-    risk_per_unit_home = abs(entry - stop) * loss_factor
+    risk_per_unit_home = max(abs(entry - stop), abs(bound - stop)) * loss_factor
     if risk_per_unit_home <= 0:
         raise BrokerError("Invalid risk per unit")
     unsigned = (budget / risk_per_unit_home).quantize(step, rounding=ROUND_DOWN)
