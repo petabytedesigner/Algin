@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""oanda_patch_v10
+"""oanda_patch
 
 Shtresë abstraksioni për thirrjet kryesore te OANDA, e përditësuar
 për V10 në mënyrë që:
@@ -9,15 +9,15 @@ për V10 në mënyrë që:
 - të centralizojë logjikën e leximit të përgjigjeve (p.sh. tradeID, errors);
 - të jetë i lehtë për t'u përditësuar nëse OANDA bën ndryshime në të ardhmen.
 
-Ideja: pjesa tjetër e robotit (utils_v10, trade_executor_v10, data_handler_v10)
+Ideja: pjesa tjetër e robotit (utils_v10, trade_executor, data_handler)
 mund të përdorë këtu funksione më të larta pa u shqetësuar për formatin e saktë
 të JSON-it të OANDA.
 """
 
 from typing import Any, Dict, List, Optional
 
-import config_v10 as config
-from utils.utils_v10 import log, safe_request
+import config as config
+from utils.common import log, safe_request
 
 
 # -------------------------------------------------------------
@@ -97,16 +97,7 @@ def extract_trade_id_from_order_response(data: Dict[str, Any]) -> Optional[str]:
         if "tradeOpened" in tx and tx["tradeOpened"]:
             return tx["tradeOpened"].get("tradeID")
 
-        trades_opened = tx.get("tradesOpened")
-        if trades_opened:
-            first = trades_opened[0]
-            if isinstance(first, dict):
-                tid = first.get("tradeID") or first.get("id")
-                if tid:
-                    return tid
-
-        # Fallback – jo ideal, por ndodh ndonjëherë që vetëm id e tranzaksionit ekziston
-        return tx.get("id")
+        return None
     except Exception as e:
         log(f"⚠️ extract_trade_id_from_order_response exception: {e}")
         return None
@@ -171,7 +162,7 @@ def get_candles_raw(
     - granularity: M1, M5, M15, H1, H4, D, etj.
     - price_type: M (mid), B (bid), A (ask)
     """
-    url = f"{config.OANDA_URL}/instruments/{instrument}/candles"
+    url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/instruments/{instrument}/candles"
     headers = {"Authorization": f"Bearer {config.API_KEY}"}
     params = {
         "granularity": granularity,

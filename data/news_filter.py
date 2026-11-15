@@ -1,10 +1,10 @@
 from __future__ import annotations
-import config_v10 as config
-from utils.utils_v10 import log
+import config as config
+from utils.common import log
 from typing import Optional, List, Dict, Any
 import datetime as _dt
 
-class NewsFilterV10:
+class NewsFilter:
     """Filtri i lajmeve për robotin V10.
 
     Që bën:
@@ -25,7 +25,7 @@ class NewsFilterV10:
     def load_news(self) -> List[Dict[str, Any]]:
         """Ngarkon lajmet nga burimi i konfiguruar.
 
-        Pret që config_v10 të ketë NEWS_PROVIDER_URL ose listë të ngurtë.
+        Pret që config të ketë NEWS_PROVIDER_URL ose listë të ngurtë.
         Përdoret nga main_v10 çdo X minuta.
 
         Format i pritur:
@@ -112,6 +112,8 @@ class NewsFilterV10:
                 t=_dt.datetime.fromisoformat(n["time"].replace("Z","+00:00"))
             except:
                 continue
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=_dt.timezone.utc)
             if self.is_in_lockout(t, now):
                 return f"Lajm HIGH për {n.get('currency')} ({n.get('title')})"
 

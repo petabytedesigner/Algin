@@ -1,9 +1,9 @@
 from __future__ import annotations
-import config_v10 as config
-from utils.utils_v10 import safe_request, log
+import config as config
+from utils.common import safe_request, log
 from typing import Optional, Dict, Any, List
 
-class DataHandlerV10:
+class DataHandler:
     """Merr candles, pricing dhe të dhëna të tjera nga OANDA.
     I përdor strategy dhe main_v10.
     """
@@ -14,7 +14,7 @@ class DataHandlerV10:
         self.api_key=config.API_KEY
 
     def get_candles(self,instrument:str,granularity:str="M15",count:int=200)->Optional[List[Dict[str,Any]]]:
-        url=f"{self.base_url}/instruments/{instrument}/candles"
+        url=f"{self.base_url}/accounts/{self.account_id}/instruments/{instrument}/candles"
         headers={"Authorization":f"Bearer {self.api_key}"}
         params={"granularity":granularity,"count":str(count),"price":"M"}
         r=safe_request("GET",url,headers=headers,params=params)
@@ -25,6 +25,7 @@ class DataHandlerV10:
             data=r.json().get("candles",[])
             out=[]
             for c in data:
+                if c.get('complete') is not True: continue
                 out.append({
                     "time":c.get("time"),
                     "open":float(c["mid"]["o"]),
@@ -32,6 +33,8 @@ class DataHandlerV10:
                     "low":float(c["mid"]["l"]),
                     "close":float(c["mid"]["c"]),
                 })
+            if any(out[j]['time'] >= out[j+1]['time'] for j in range(len(out)-1)):
+                return None
             return out
         except Exception as e:
             log(f"⚠️ Error parse candles {instrument}: {e}")

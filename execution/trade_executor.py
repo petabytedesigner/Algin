@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
-import config_v10 as config
-from utils.utils_v10 import log, safe_request, get_pricing, pip_size
+import config as config
+from utils.common import log, safe_request, get_pricing, pip_size
 
 import datetime as dt
 import os, csv
@@ -44,7 +44,7 @@ class OrderRequest:
     comment: Optional[str] = None     # për debug / audit
 
 
-class TradeExecutorV10:
+class TradeExecutor:
     """Ekzekutuesi i tregtive për V10 (shtresa OANDA).
 
     Ky modul:
@@ -75,6 +75,9 @@ class TradeExecutorV10:
         - tradeID (str) nëse çdo gjë shkon mirë
         - None nëse ka dështim (log detalet)
         """
+        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
+            log("Order submission blocked by development gate.")
+            return None
         if req.units == 0:
             log(f"⚠️ Units 0 për {req.instrument}, nuk dërgojmë order.")
             return None
@@ -159,8 +162,7 @@ class TradeExecutorV10:
             if tx:
                 if "tradeOpened" in tx:
                     trade_id = tx["tradeOpened"]["tradeID"]
-                elif "tradesOpened" in tx and tx["tradesOpened"]:
-                    trade_id = tx["tradesOpened"][0]["tradeID"]
+                
         except Exception as e:
             log(f"⚠️ Nuk arritëm të nxjerrim tradeID nga përgjigja: {e}")
 
@@ -190,6 +192,8 @@ class TradeExecutorV10:
         - partial_close_engine (për BE / trailing)
         - safety_check / order_validation nëse duam të përditësojmë mbrojtjen.
         """
+        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
+            return False
         if sl_price is None and tp_price is None:
             return True  # asgjë për të bërë
 
@@ -226,6 +230,8 @@ class TradeExecutorV10:
         Nëse units është None → mbyllim gjithë tregtinë.
         Nëse units > 0 → mbyllim aq units (p.sh. për partial close 50%).
         """
+        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
+            return False
         url = f"{self.base_url}/accounts/{self.account_id}/trades/{trade_id}/close"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
