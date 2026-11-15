@@ -1,7 +1,7 @@
-"""Category-3 read-only entrypoint; broker mutations are not implemented here.
+"""Category-4 read-only entrypoint; broker mutations are not implemented here.
 
-Strategy and risk output is advisory. No order submission, SL/TP changes or
-partial close can be requested until later categories are verified.
+Strategy and risk output remains advisory. Break-even and partial-close
+intents may be prepared locally, but real broker mutations are disabled.
 """
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 import config
 from data.data_handler import DataHandler
 from data.market_sessions import MarketSessions
+from broker.account_reconciler import AccountReconciler, ReconcileError
+from execution.trade_management import ManagementLoop
+from storage.lifecycle_state import StateError
+from storage.intent_journal import JournalError
 from execution.trade_executor import BrokerDataError, TradeExecutor
 from risk.risk_engine import Grade, RiskConfig, RiskEngine, TradeCandidate
 from risk.trade_plan import RiskPolicy, TradePlanner
@@ -144,25 +148,62 @@ def scan_once() -> int:
     return 0
 
 
+def manage_once() -> int:
+    """Read-only recovery before evaluating entry sessions or signals."""
+    if not config.API_KEY or not config.ACCOUNT_ID:
+        LOG.error("OANDA Practice credentials required for lifecycle recovery")
+        return 2
+    try:
+        report = ManagementLoop(AccountReconciler(config.ACCOUNT_ID)).run_once()
+    except (ReconcileError, StateError, JournalError, ValueError) as exc:
+        LOG.error("Lifecycle reconciliation blocked: %s", exc)
+        return 3
+    if report.blocked_reasons:
+        LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
+        return 3
+    LOG.info("Account cursor=%s managed_trades=%d no_broker_writes",
+             report.cursor, len(report.owned_open_trades))
+    return 0
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Algin Category 3 read-only baseline")
+    parser = argparse.ArgumentParser(description="Algin Category 4 read-only baseline")
     parser.add_argument("--check", action="store_true", help="Verify imports without network")
-    parser.add_argument("--once", action="store_true", help="One read-only scan")
+    parser.add_argument("--once", action="store_true", help="One legacy read-only signal scan")
+    parser.add_argument("--manage-once", action="store_true",
+                        help="Reconcile broker/lifecycle state without new entries")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if config.ORDER_WRITES_ENABLED:
-        LOG.error("Category-3 build rejects any order-enabled configuration")
+        LOG.error("Category-4 build rejects any order-enabled configuration")
         return 3
     if args.check:
-        LOG.info("Category-3 imports OK; broker writes DISABLED")
+        LOG.info("Category-4 imports OK; broker writes DISABLED")
         return 0
+    if args.manage_once:
+        return manage_once()
     if args.once:
         return scan_once()
-    while True:
-        result = scan_once()
-        if result:
-            return result
-        time.sleep(60)
+    # Hold the account lease for the WHOLE running service lifetime.
+    # A second instance cannot interleave between scan cycles.
+    if not config.API_KEY or not config.ACCOUNT_ID:
+        LOG.error("OANDA Practice credentials required")
+        return 2
+    try:
+        with AccountReconciler(config.ACCOUNT_ID) as reconciler:
+            while True:
+                # P36: recovery before checking any entry-session constraint.
+                report = reconciler.run()
+                if report.blocked_reasons:
+                    LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
+                    return 3
+                result = scan_once()
+                if result:
+                    return result
+                time.sleep(60)
+    except (ReconcileError, StateError, JournalError, ValueError) as exc:
+        LOG.error("Management process stopped safely: %s", exc)
+        return 3
 
 
 if __name__ == "__main__":

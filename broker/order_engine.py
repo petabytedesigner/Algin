@@ -35,7 +35,7 @@ def _result_unknown(attempt_id, reason):
 
 
 class OrderEngine:
-    """P19–P30. Live entry permission must be added only after Category 4."""
+    """P19–P30. Live entry is disabled pending separate operational release."""
 
     def __init__(self, account_id: str, *, transport=None, journal=None):
         self.account_id = _identity(account_id, "account ID")
@@ -160,6 +160,7 @@ class OrderEngine:
             request=prepared.payload,
             risk_pct=format(number(plan.reserved_risk_pct, "reserved risk", positive=True), "f"),
             margin_home=format(number(plan.estimated_margin_home, "margin", positive=True), "f"),
+            grade=plan.grade,
         )
         self.journal.transition(attempt_id, "IN_FLIGHT", status_note=f"checkpoint={checkpoint}")
         # No loop. No requests adapter retries. No retry even if POST never
