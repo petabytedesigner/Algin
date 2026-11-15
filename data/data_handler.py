@@ -1,59 +1,48 @@
+"""Validated, completed OANDA candles and account-specific quote access."""
 from __future__ import annotations
-import config as config
-from utils.common import safe_request, log
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
+from math import isfinite
+from broker.oanda_client import BrokerError, number, quote_from_pricing, timestamp
+
 
 class DataHandler:
-    """Merr candles, pricing dhe të dhëna të tjera nga OANDA.
-    I përdor strategy dhe main_v10.
-    """
+    def __init__(self, client):
+        self.client = client
 
-    def __init__(self):
-        self.base_url=config.OANDA_URL
-        self.account_id=config.ACCOUNT_ID
-        self.api_key=config.API_KEY
+    def get_candles(self, instrument: str, granularity: str = "M15", count: int = 200):
+        response = self.client.candles(instrument, granularity, count)
+        if response.get("instrument") != instrument or response.get("granularity") != granularity:
+            raise BrokerError("Candle instrument/granularity mismatch")
+        raw = response.get("candles")
+        if not isinstance(raw, list):
+            raise BrokerError("Missing candle array")
+        result = []
+        previous_time = None
+        for candle in raw:
+            if not isinstance(candle, dict):
+                raise BrokerError("Malformed candle")
+            if candle.get("complete") is not True:
+                # Latest in-progress candle is not a valid signal input.
+                continue
+            try:
+                t = timestamp(candle["time"])
+                mid = candle["mid"]
+                o, h, l, c = (float(number(mid[k])) for k in ("o", "h", "l", "c"))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise BrokerError("Malformed OHLC data") from exc
+            if previous_time is not None and t <= previous_time:
+                raise BrokerError("Duplicate or out-of-order candle timestamps")
+            previous_time = t
+            if not (all(isfinite(v) and v > 0 for v in (o, h, l, c)) and
+                    l <= min(o, c) <= max(o, c) <= h):
+                raise BrokerError("Invalid OHLC relationships")
+            result.append({"time": t.isoformat(), "open": o, "high": h,
+                           "low": l, "close": c})
+        if len(result) < 60:
+            raise BrokerError("Insufficient completed candle history")
+        return result
 
-    def get_candles(self,instrument:str,granularity:str="M15",count:int=200)->Optional[List[Dict[str,Any]]]:
-        url=f"{self.base_url}/accounts/{self.account_id}/instruments/{instrument}/candles"
-        headers={"Authorization":f"Bearer {self.api_key}"}
-        params={"granularity":granularity,"count":str(count),"price":"M"}
-        r=safe_request("GET",url,headers=headers,params=params)
-        if not r or r.status_code!=200:
-            log(f"⚠️ DataHandler: dështoi candles për {instrument}")
-            return None
-        try:
-            data=r.json().get("candles",[])
-            out=[]
-            for c in data:
-                if c.get('complete') is not True: continue
-                out.append({
-                    "time":c.get("time"),
-                    "open":float(c["mid"]["o"]),
-                    "high":float(c["mid"]["h"]),
-                    "low":float(c["mid"]["l"]),
-                    "close":float(c["mid"]["c"]),
-                })
-            if any(out[j]['time'] >= out[j+1]['time'] for j in range(len(out)-1)):
-                return None
-            return out
-        except Exception as e:
-            log(f"⚠️ Error parse candles {instrument}: {e}")
-            return None
-
-    def get_price(self,instrument:str)->Optional[Dict[str,float]]:
-        url=f"{self.base_url}/accounts/{self.account_id}/pricing"
-        headers={"Authorization":f"Bearer {self.api_key}"}
-        params={"instruments":instrument}
-        r=safe_request("GET",url,headers=headers,params=params)
-        if not r or r.status_code!=200:
-            log(f"⚠️ DataHandler: pricing fail {instrument}")
-            return None
-        try:
-            d=r.json()["prices"][0]
-            return {
-                "bid":float(d["bids"][0]["price"]),
-                "ask":float(d["asks"][0]["price"]),
-                "mid":(float(d["bids"][0]["price"]) + float(d["asks"][0]["price"])) / 2
-            }
-        except:
-            return None
+    def get_quote_and_conversions(self, instrument: str):
+        response = self.client.pricing(instrument)
+        quote = quote_from_pricing(response, instrument, datetime.now(timezone.utc))
+        return quote, response

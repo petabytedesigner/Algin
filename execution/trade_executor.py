@@ -1,258 +1,157 @@
+"""Broker mutation coordinator. Intent journal written before EVERY submit/modify/close."""
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from decimal import Decimal
+import hashlib
+import re
 
-import config as config
-from utils.common import log, safe_request, get_pricing, pip_size
-
-import datetime as dt
-import os, csv
-
-def _csv_enabled():
-    return getattr(config, "CSV_ENABLED", False)
-
-def _csv_dir():
-    return getattr(config, "CSV_PATH", "csv")
-
-def _ensure_csv_dir():
-    if _csv_enabled() and not os.path.exists(_csv_dir()):
-        os.makedirs(_csv_dir(), exist_ok=True)
-
-def csv_log(event: str, instrument: str = "", info: str = ""):
-    if not _csv_enabled():
-        return
-    _ensure_csv_dir()
-    fn = os.path.join(_csv_dir(), f"events_{dt.datetime.utcnow().date()}.csv")
-    new = not os.path.exists(fn)
-    with open(fn, "a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["time","event","instrument","info"])
-        w.writerow([dt.datetime.utcnow().isoformat(), event, instrument, info])
-
-
-@dataclass
-class OrderRequest:
-    instrument: str
-    direction: str          # 'BUY' ose 'SELL'
-    units: int              # units të nënshkruar (+ për BUY, - për SELL)
-    sl_price: float
-    tp_price: float
-    client_tag: Optional[str] = None  # p.sh. 'V10_BREAK_RETEST'
-    comment: Optional[str] = None     # për debug / audit
+from broker.oanda_client import BrokerError, BrokerRejected, OutcomeUnknown, number, trade_fill
+from storage.state_store import utc_now
 
 
 class TradeExecutor:
-    """Ekzekutuesi i tregtive për V10 (shtresa OANDA).
+    def __init__(self, client, store, events, submission_enabled=False):
+        self.client = client
+        self.store = store
+        self.events = events
+        self.submission_enabled = submission_enabled
 
-    Ky modul:
-    - NUK llogarit risk, units, SL/TP logjik – këto vijnë nga risk/strategy.
-    - Merr vetëm një OrderRequest gati dhe e dërgon te Oanda.
-    - Vendos MARKET order + SL + TP në një hap.
-    - Logon çdo hap dhe kthen tradeID ose None.
+    @staticmethod
+    def _safe_id(signal_id):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,96}", signal_id):
+            raise BrokerError("Unsafe signal identifier")
+        return "algin-" + hashlib.sha256(signal_id.encode()).hexdigest()[:24]
 
-    Në këtë version:
-    - Nuk menaxhon ende partial close / trailing, ato do jenë në
-      partial_close_engine.py dhe do përdorin endpoint-et e OANDA
-      për të modifikuar pozicione ekzistuese.
-    """
+    def _record(self, state, key, status, **other):
+        record = state["intents"].setdefault(key, {})
+        record.update(other)
+        record["status"] = status
+        record["updated_at"] = utc_now()
+        self.store.save(state)
 
-    def __init__(self) -> None:
-        self.base_url = config.OANDA_URL
-        self.account_id = config.ACCOUNT_ID
-        self.api_key = config.API_KEY
-
-    # ---------------------------------------------------------
-    #  HAPI KRYESOR: HAP TREGTI ME SL & TP
-    # ---------------------------------------------------------
-
-    def open_market_order(self, req: OrderRequest) -> Optional[str]:
-        """Dërgon një MARKET order me SL & TP.
-
-        Kthen:
-        - tradeID (str) nëse çdo gjë shkon mirë
-        - None nëse ka dështim (log detalet)
-        """
-        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
-            log("Order submission blocked by development gate.")
-            return None
-        if req.units == 0:
-            log(f"⚠️ Units 0 për {req.instrument}, nuk dërgojmë order.")
-            return None
-
-        # Sigurohemi që direction përputhet me units
-        if req.direction == "BUY" and req.units < 0:
-            log("⚠️ Direction BUY por units negative, korrigjojmë në absolut.")
-            units = abs(req.units)
-        elif req.direction == "SELL" and req.units > 0:
-            log("⚠️ Direction SELL por units pozitive, korrigjojmë në negativ.")
-            units = -abs(req.units)
-        else:
-            units = req.units
-
-        side = "BUY" if units > 0 else "SELL"
-
-        # Double-check pricing vetëm për log (opsionale)
-        pricing = get_pricing(req.instrument)
-        if not pricing:
-            log(f"⚠️ Nuk morëm pricing për {req.instrument}, por po provojmë order.")
-            entry_hint = None
-        else:
-            entry_hint = pricing.get("ask") if side == "BUY" else pricing.get("bid")
-
-        url = f"{self.base_url}/accounts/{self.account_id}/orders"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        order_payload: Dict[str, Any] = {
-            "order": {
-                "instrument": req.instrument,
-                "units": str(units),
-                "type": "MARKET",
-                "timeInForce": "FOK",
-                "positionFill": "DEFAULT",
-                "stopLossOnFill": {
-                    "price": f"{req.sl_price:.5f}",
-                },
-                "takeProfitOnFill": {
-                    "price": f"{req.tp_price:.5f}",
-                },
-            }
-        }
-
-        # Client extensions (tag/koment) për identifikim të pozicioneve të V10
-        client_ext: Dict[str, Any] = {}
-        if req.client_tag:
-            client_ext["tag"] = req.client_tag
-        if req.comment:
-            client_ext["comment"] = req.comment
-
-        if client_ext:
-            order_payload["order"]["clientExtensions"] = client_ext
-
-        log(
-            f"📤 Dërgojmë MARKET order për {req.instrument} {side} {units} "
-            f"SL={req.sl_price:.5f} TP={req.tp_price:.5f}..."
-        )
-
-        r = safe_request("POST", url, headers=headers, data=json.dumps(order_payload))
-        if not r:
-            log(f"❌ Dështoi kërkesa e order-it për {req.instrument}: no-response")
-            return None
-
-        if r.status_code not in (200, 201):
-            try:
-                err = r.json()
-            except Exception:
-                err = r.text
-            log(f"❌ OANDA order error ({r.status_code}) për {req.instrument}: {err}")
-            return None
-
-        data = r.json()
-        trade_id: Optional[str] = None
-
-        # Kërkojmë tradeOpened / filling nga përgjigja
+    def submit(self, state, plan, signal_id, grade):
+        if not self.submission_enabled:
+            self.events.emit("SUBMIT_DISABLED", instrument=plan.instrument,
+                             direction=plan.direction, signal_id=signal_id, status="BLOCKED")
+            return {"status": "BLOCKED"}
+        intent_id = self._safe_id(signal_id)
+        if intent_id in state["intents"]:
+            # Prevent duplicates from restart, loop, and lost HTTP responses.
+            return {"status": "BLOCKED", "reason": "Intent already recorded"}
+        self._record(state, intent_id, "SUBMITTING", kind="OPEN", instrument=plan.instrument,
+                     direction=plan.direction, signal_id=signal_id, grade=grade,
+                     units=str(plan.units), entry_hint=str(plan.entry_hint),
+                     stop_loss=str(plan.stop_loss), take_profit=str(plan.take_profit),
+                     risk_pct=str(plan.risk_pct), risk_home=str(plan.risk_home))
+        payload = plan.order(intent_id)
         try:
-            # OANDA kthen orderFillTransaction me tradeOpened ose tradesOpened
-            tx = data.get("orderFillTransaction") or data.get("orderCreateTransaction")
-            if tx:
-                if "tradeOpened" in tx:
-                    trade_id = tx["tradeOpened"]["tradeID"]
-                
-        except Exception as e:
-            log(f"⚠️ Nuk arritëm të nxjerrim tradeID nga përgjigja: {e}")
-
-        if not trade_id:
-            log(f"⚠️ Order u krye por nuk gjetëm tradeID të qartë: {data}")
-        else:
-            log(
-                f"✅ Order hapur: {req.instrument} {side} {units} "
-                f"SL={req.sl_price:.5f} TP={req.tp_price:.5f} trade_id={trade_id}"
-            )
-
-        return trade_id
-
-    # ---------------------------------------------------------
-    #  FUNKSIONE NDËRTORE (do përdoren nga module të tjera)
-    # ---------------------------------------------------------
-
-    def modify_sl_tp(
-        self,
-        trade_id: str,
-        sl_price: Optional[float] = None,
-        tp_price: Optional[float] = None,
-    ) -> bool:
-        """Modifikon SL/TP për një trade ekzistues.
-
-        Përdoret nga:
-        - partial_close_engine (për BE / trailing)
-        - safety_check / order_validation nëse duam të përditësojmë mbrojtjen.
-        """
-        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
-            return False
-        if sl_price is None and tp_price is None:
-            return True  # asgjë për të bërë
-
-        url = f"{self.base_url}/accounts/{self.account_id}/trades/{trade_id}/orders"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
+            response = self.client.create_order(payload)
+            outcome = trade_fill(response)
+        except BrokerRejected:
+            self._record(state, intent_id, "REJECTED")
+            self.events.emit("ORDER_REJECTED", instrument=plan.instrument, intent_id=intent_id, status="REJECTED")
+            return {"status": "REJECTED"}
+        except (OutcomeUnknown, BrokerError):
+            self._record(state, intent_id, "UNKNOWN")
+            self.events.emit("ORDER_UNKNOWN", instrument=plan.instrument, intent_id=intent_id, status="UNKNOWN")
+            return {"status": "UNKNOWN"}
+        if outcome["status"] != "OPENED":
+            self._record(state, intent_id, outcome["status"])
+            return outcome
+        trade_id = outcome["trade_id"]
+        # The fill is real. A failed read/verification MUST NOT lose it.
+        self._record(state, intent_id, "FILLED_UNVERIFIED", trade_id=trade_id)
+        state["trades"][trade_id] = {
+            "instrument": plan.instrument, "direction": plan.direction, "grade": grade,
+            "intent_id": intent_id, "entry": str(outcome["entry"] or plan.entry_hint),
+            "initial_units": str(outcome["units"] or plan.units),
+            "initial_stop": str(plan.stop_loss), "stop": str(plan.stop_loss),
+            "take_profit": str(plan.take_profit), "be_done": False, "partial_done": False,
+            "risk_home": str(plan.risk_home), "risk_pct": str(plan.risk_pct),
+            "opened_at": utc_now(),
         }
+        self.store.save(state)
+        try:
+            observed = self.client.trade(trade_id).get("trade")
+            if not isinstance(observed, dict) or not observed.get("stopLossOrder") or not observed.get("takeProfitOrder"):
+                raise BrokerError("Missing protective orders on broker trade")
+            if observed.get("state") != "OPEN":
+                raise BrokerError("Trade not open after submission")
+        except BrokerError:
+            self._record(state, intent_id, "UNPROTECTED_OR_UNVERIFIED")
+            self.events.emit("PROTECTION_UNKNOWN", instrument=plan.instrument, intent_id=intent_id, trade_id=trade_id)
+            return {"status": "UNPROTECTED_OR_UNVERIFIED", "trade_id": trade_id}
+        self._record(state, intent_id, "CONFIRMED")
+        self.events.emit("TRADE_OPENED", instrument=plan.instrument, direction=plan.direction, grade=grade,
+                         intent_id=intent_id, trade_id=trade_id, units=str(plan.units),
+                         stop_loss=str(plan.stop_loss), take_profit=str(plan.take_profit), status="CONFIRMED")
+        return {"status": "CONFIRMED", "trade_id": trade_id}
 
-        req: Dict[str, Any] = {}
-        if sl_price is not None:
-            req["stopLoss"] = {"price": f"{sl_price:.5f}"}
-        if tp_price is not None:
-            req["takeProfit"] = {"price": f"{tp_price:.5f}"}
+    def move_stop(self, state, trade_id, new_stop):
+        if not self.submission_enabled:
+            return "BLOCKED"
+        trade = state["trades"][trade_id]
+        key = trade["intent_id"] + "-be"
+        if key in state["intents"]:
+            return "BLOCKED"
+        self._record(state, key, "SUBMITTING", kind="BE", trade_id=trade_id,
+                     expected_stop=str(new_stop))
+        try:
+            self.client.set_dependent_orders(trade_id, stop_loss=new_stop)
+        except BrokerRejected:
+            self._record(state, key, "REJECTED")
+            return "REJECTED"
+        except (OutcomeUnknown, BrokerError):
+            self._record(state, key, "UNKNOWN")
+            return "UNKNOWN"
+        self._record(state, key, "UNVERIFIED")
+        try:
+            observed = self.client.trade(trade_id)["trade"]
+            actual = number(observed["stopLossOrder"]["price"])
+            if actual != number(new_stop):
+                return "UNVERIFIED"
+        except (BrokerError, KeyError, TypeError):
+            return "UNVERIFIED"
+        trade["stop"] = str(new_stop)
+        trade["be_done"] = True
+        self.store.save(state)
+        self._record(state, key, "CONFIRMED")
+        self.events.emit("BREAK_EVEN", instrument=trade["instrument"], trade_id=trade_id, status="CONFIRMED")
+        return "CONFIRMED"
 
-        if not req:
-            return True
-
-        r = safe_request("PUT", url, headers=headers, data=json.dumps(req))
-        if not r or r.status_code not in (200, 201):
-            log(f"⚠️ Dështoi modifikimi i SL/TP për trade {trade_id}: {r.text if r else 'no-response'}")
-            return False
-
-        log(
-            f"🔁 U përditësua SL/TP për trade {trade_id} "
-            f"(SL={sl_price if sl_price is not None else '-'}, "
-            f"TP={tp_price if tp_price is not None else '-'})"
-        )
-        return True
-
-    def close_trade(self, trade_id: str, units: Optional[int] = None) -> bool:
-        """Mbyll ose mbyll pjesërisht një trade.
-
-        Nëse units është None → mbyllim gjithë tregtinë.
-        Nëse units > 0 → mbyllim aq units (p.sh. për partial close 50%).
-        """
-        if not getattr(config, "ENABLE_ORDER_SUBMISSION", False):
-            return False
-        url = f"{self.base_url}/accounts/{self.account_id}/trades/{trade_id}/close"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload: Dict[str, Any] = {}
-        if units is not None:
-            payload["units"] = str(units)
-
-        r = safe_request("PUT", url, headers=headers, data=json.dumps(payload) if payload else None)
-        if not r or r.status_code not in (200, 201):
-            log(f"⚠️ Dështoi mbyllja e trade {trade_id}: {r.text if r else 'no-response'}")
-            csv_log("TRADE_CLOSE_FAIL", "", f"trade_id={trade_id}")
-            return False
-
-        log(f"✅ Trade {trade_id} u mbyll (partial ose total).")
-
-        # Për logim institucional: dallojmë mbylljen totale vs partial
-        event = "MANUAL_CLOSE" if units is None else "SYSTEM_CLOSE"
-        info = f"trade_id={trade_id}; units={units if units is not None else 'ALL'}"
-        csv_log(event, "", info)
-
-        return True
+    def partial_close(self, state, trade_id, units, previous_units):
+        if not self.submission_enabled:
+            return "BLOCKED"
+        trade = state["trades"][trade_id]
+        key = trade["intent_id"] + "-partial"
+        if key in state["intents"]:
+            return "BLOCKED"
+        requested = number(units)
+        prev = number(previous_units)
+        if requested <= 0 or requested >= abs(prev):
+            return "INVALID"
+        self._record(state, key, "SUBMITTING", kind="PARTIAL", trade_id=trade_id,
+                     requested_units=str(requested), original_units=str(prev))
+        try:
+            self.client.close_trade(trade_id, str(requested))
+        except BrokerRejected:
+            self._record(state, key, "REJECTED")
+            return "REJECTED"
+        except (OutcomeUnknown, BrokerError):
+            self._record(state, key, "UNKNOWN")
+            return "UNKNOWN"
+        self._record(state, key, "UNVERIFIED")
+        try:
+            observed = self.client.trade(trade_id)["trade"]
+            remaining = number(observed["currentUnits"])
+            if abs(remaining) != abs(prev) - requested:
+                return "UNVERIFIED"
+        except (BrokerError, KeyError, TypeError):
+            return "UNVERIFIED"
+        trade["partial_done"] = True
+        trade["current_units"] = str(remaining)
+        self.store.save(state)
+        self._record(state, key, "CONFIRMED")
+        self.events.emit("PARTIAL_CLOSE", instrument=trade["instrument"], trade_id=trade_id,
+                         units=str(requested), status="CONFIRMED")
+        return "CONFIRMED"
