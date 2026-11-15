@@ -575,6 +575,61 @@ class OrderIntegrationTests(unittest.TestCase):
                            filled.attempt_id
                        )
 
+
+    def test_P57_audit_failure_after_intent_prevents_broker_mutation(self):
+        plan, rules, conv = inputs()
+        with patch.object(self.engine.audit, "emit",
+                          side_effect=AuditError("disk full")):
+            with self.assertRaises(AuditError):
+                self.engine.submit(
+                    plan, rules, conv, signal_id="audit-failure", now=NOW
+                )
+        self.assertEqual(self.transport.posts, 0)
+        attempts = self.journal.snapshot()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "PREPARED")
+
+    def test_P60_trace_includes_confirmed_final_close_transaction(self):
+        from risk.trade_lifecycle import TradeRecord
+        from utils.time_tools import iso_utc
+        plan, rules, conversion = inputs()
+        result = self.engine.submit(
+            plan, rules, conversion, signal_id="sig-closed", now=NOW
+        )
+        self.assertTrue(result.protection_verified)
+        request = self.transport.payload["order"]
+        rec = TradeRecord(
+            trade_id=result.trade_id, attempt_id=result.attempt_id,
+            instrument="EUR_USD", direction="LONG",
+            grade=plan.grade, entry_price=result.fill_price,
+            initial_stop=request["stopLossOnFill"]["price"],
+            take_profit=request["takeProfitOnFill"]["price"],
+            initial_units=result.filled_units, current_units=d("0"),
+            current_stop=request["stopLossOnFill"]["price"],
+            risk_pct=plan.reserved_risk_pct, opened_at=NOW,
+            closed=True, close_transaction_ids=("300",),
+            net_pl_home=d("10"), result_counted=True,
+            closed_at=NOW + timedelta(minutes=45)
+        )
+        self.store.initialize("299", {result.trade_id: rec.to_dict()})
+        self.store.mutate(lambda state: state.update({
+            "cursor": "300",
+            "processed_transactions": ["300"],
+            "counted_closures": ["300"],
+            "closed_results": {result.trade_id: {
+                "transaction_id": "300", "pl": "10",
+                "closed_at": iso_utc(rec.closed_at),
+                "instrument": "EUR_USD"
+            }}
+        }))
+        trace = TradeTrace(
+            "acct-1", events=self.engine.audit,
+            journal=self.journal, state=self.store
+        ).attempt(result.attempt_id)
+        self.assertEqual(trace["state"], "CLOSED_CONFIRMED")
+        self.assertEqual(trace["closing_transaction_ids"], ["300"])
+        self.assertTrue(trace["closed_confirmed"])
+
 class ObservationAuditTests(unittest.TestCase):
     def test_P59_P61_no_session_code_and_cycle_completion(self):
         with TemporaryDirectory() as folder:
@@ -623,6 +678,23 @@ class ObservationAuditTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertEqual(strategy.last_rejection_code,
                          "TREND_MISMATCH_OR_RESET")
+
+
+
+    def test_P61_unfinished_heartbeat_blocks_scan_before_broker_read(self):
+        with TemporaryDirectory() as folder:
+            with (
+                patch.object(config, "ACCOUNT_ID", "orphan-account"),
+                patch.object(config, "API_KEY", "fake-token"),
+                patch.object(config, "HEARTBEAT_PATH",
+                             str(Path(folder) / "heartbeat.json")),
+                patch.object(TradeExecutor, "get_open_trades") as read
+            ):
+                hb = HeartbeatStore("orphan-account")
+                hb.start("orphan-cycle", kind="SCAN", now=NOW)
+                self.assertEqual(main.scan_once(), 3)
+                read.assert_not_called()
+                self.assertEqual(hb.read()["state"], "ALIVE")
 
 
 

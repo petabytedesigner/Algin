@@ -30,7 +30,9 @@ Stable event IDs prevent duplicate accounting. File locks and fsync guard
 append-only writes. A broken header, partial row, symlink or stale lock is
 rejected, never silently repaired. Only approved event fields can be written;
 raw broker HTTP responses, token strings, stack traces and free-text errors
-are never accepted. A repeated event with identical payload is idempotent.
+are never accepted. A repeated event with identical payload is idempotent. If event persistence
+fails after a durable order intent is created, the broker POST is not made,
+and the PREPARED journal state blocks further blind attempts.
 
 telemetry/runtime.py wraps scan_once, manage_once and held-lease reconciliation.
 Heartbeat is written ALIVE before work and CYCLE_COMPLETE only after
@@ -83,8 +85,9 @@ The report requires unique completed trades, complete cost transaction lists,
 initial equity and chronologically ordered closure evidence. Unexplained
 costs or a missing trade cause a hard error. Profit factor is undefined
 (None) with no losses; a large-winner concentration flag identifies excessive
-reliance on a few gains. Session metadata must come from verifiable original
-trade times for operational reporting.
+reliance on a few gains. Session metadata is derived and verified from the original opened_at
+UTC timestamp (IANA DST-aware FX sessions). Missing or conflicting times
+are rejected before any session-level performance result is produced.
 
 ## Operational caveats
 

@@ -11,3 +11,4 @@ csv/events_*.csv
 state.json
 state_v10.json
 heartbeat_v10.txt
+csv/events_*.lock
