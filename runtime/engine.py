@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import config
 from broker.oanda_client import BrokerError, number, quote_from_pricing, timestamp
 from data.data_handler import DataHandler
+from data.news_guard import NewsGuard
 from execution.trade_executor import TradeExecutor
 from risk.risk_engine import (Grade, OpenPositionRisk, RiskConfig,
                               RiskEngine, TradeCandidate)
@@ -29,6 +30,10 @@ class TradingEngine:
     def __init__(self, client, store, events, submit_enabled: bool = False):
         self.client, self.store, self.events = client, store, events
         self.data = DataHandler(client)
+        self.news_guard = NewsGuard(mode=config.NEWS_MODE, path=config.NEWS_PROVIDER_PATH,
+                                    cache_seconds=config.NEWS_CACHE_SECONDS,
+                                    before_minutes=config.NEWS_LOCKOUT_MINUTES_BEFORE,
+                                    after_minutes=config.NEWS_LOCKOUT_MINUTES_AFTER)
         self.strategy = Strategy()
         self.executor = TradeExecutor(client, store, events, submission_enabled=submit_enabled)
         self.submit_enabled = submit_enabled
@@ -192,7 +197,7 @@ class TradingEngine:
             return False, "Unprotected trade"
         if config.ENABLE_SESSIONS and not session_open(now):
             return False, "Outside entry session"
-        if config.NEWS_MODE != "DISABLED_ACKNOWLEDGED":
+        if config.NEWS_MODE not in ("DISABLED_ACKNOWLEDGED", "ENABLED_JSON"):
             return False, "News feed not verified"
         return True, ""
 
@@ -241,6 +246,10 @@ class TradingEngine:
                     grade=Grade(local["grade"]), risk_pct=float(local["risk_pct"]),
                     opened_at=timestamp(local["opened_at"]) if local.get("opened_at") else now))
         for inst in config.INSTRUMENTS:
+            news_allowed, news_reason = self.news_guard.check(inst, now)
+            if not news_allowed:
+                self.events.emit("ENTRY_SKIPPED", instrument=inst, reason="NEWS_"+news_reason)
+                continue
             if self._in_cooldown(inst, now):
                 self.events.emit("ENTRY_SKIPPED", instrument=inst, reason="COOLDOWN")
                 continue
