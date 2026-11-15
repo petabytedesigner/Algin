@@ -1,175 +1,72 @@
-
-# main.py - compact institutional version with full CSV logging (events 1–11)
-# NOTE: This is a compact but complete version preserving full logic while avoiding size explosion.
-
+"""Algin Practice entrypoint. Never requests a live OANDA endpoint."""
 from __future__ import annotations
-import json, datetime as dt, os, csv
-from typing import Any, Dict, List
-import config as config
 
-# Utils
-from utils.common import log, get_pricing, sleep_minutes, now_utc_iso
-from utils.time_tools import TimeTools
+import argparse
+import json
+import logging
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
-# Data
-from data.data_handler import DataHandler
-from data.news_filter import NewsFilter
-from data.market_sessions import MarketSessions
+import config
+from broker.oanda_client import OandaClient, BrokerError
+from runtime.engine import TradingEngine
+from storage.state_store import StateStore, StateError
+from utils.event_log import EventLogger
 
-# Strategy
-from strategy.strategy import Strategy
+LOG = logging.getLogger("algin")
 
-# Risk
-from risk.risk_engine import RiskEngine, RiskConfig
-from risk.exposure_engine import ExposureEngine
-from risk.cooldown_engine import CooldownEngine
 
-# Execution
-from execution.trade_executor import TradeExecutor, OrderRequest
-from execution.partial_close_engine import PartialCloseEngine
-from execution.safety_check import SafetyCheck
-from execution.order_validation import OrderValidation
+def heartbeat(phase: str, details: str = "") -> None:
+    path = Path(config.HEARTBEAT_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"utc": datetime.now(timezone.utc).isoformat(),
+                               "phase": phase, "details": details[:200]}), encoding="utf-8")
+    tmp.replace(path)
 
-# ----------------------- STATE -----------------------
-def load_state():
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Algin OANDA Practice bot")
+    parser.add_argument("--once", action="store_true", help="Run exactly one cycle")
+    parser.add_argument("--submit-practice", action="store_true", help="Allow Practice order mutations only when also explicitly enabled in environment")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if not config.API_KEY or not config.ACCOUNT_ID:
+        LOG.error("Set OANDA_API_TOKEN and OANDA_ACCOUNT_ID; do not put them in Git")
+        return 2
+    allowed = args.submit_practice and config.ENABLE_ORDER_SUBMISSION
+    if args.submit_practice and not allowed:
+        LOG.error("Practice submit requires ALGIN_PRACTICE_SUBMIT=I_ACCEPT_PRACTICE_ORDERS")
+        return 2
+    if not allowed:
+        LOG.warning("OBSERVE ONLY: broker writes disabled")
+    client = OandaClient(config.API_KEY, config.ACCOUNT_ID)
+    store = StateStore(config.ACCOUNT_ID)
+    events = EventLogger(config.CSV_PATH)
+    with store.single_instance():
+        engine = TradingEngine(client=client, store=store, events=events,
+                               submit_enabled=allowed)
+        while True:
+            heartbeat("RUNNING")
+            try:
+                engine.cycle()
+                heartbeat("CYCLE_COMPLETED")
+            except (StateError, BrokerError, ValueError, KeyError, TypeError) as exc:
+                LOG.error("Cycle blocked: %s", exc.__class__.__name__)
+                events.emit("CYCLE_BLOCKED", reason=exc.__class__.__name__, status="BLOCKED")
+                heartbeat("BLOCKED", exc.__class__.__name__)
+                if isinstance(exc, StateError):
+                    return 3
+            if args.once:
+                return 0
+            time.sleep(config.POLL_SECONDS)
+
+
+if __name__ == "__main__":
     try:
-        return json.load(open("state_v10.json"))
-    except:
-        return {"last_run":None,"open_trades":{}, "cooldown":{}, "news_cache":[], "last_news_update":None}
-
-def save_state(s): json.dump(s, open("state_v10.json","w"), indent=4)
-
-# ----------------------- CSV SYSTEM -----------------------
-def csv_enabled(): return getattr(config,"CSV_ENABLED",False)
-def csv_dir(): return getattr(config,"CSV_PATH","csv")
-def ensure_csv():
-    if csv_enabled() and not os.path.exists(csv_dir()):
-        os.makedirs(csv_dir(),exist_ok=True)
-
-def csv_log(event:str, inst:str="", direction:str="", grade:str="", score:str="",
-            price:str="", ema20:str="", ema50:str="", atr:str="",
-            zone_low:str="", zone_high:str="", risk_pct:str="", units:str="",
-            sl:str="", tp:str="", extra:str=""):
-    if not csv_enabled(): return
-    ensure_csv()
-    fn = os.path.join(csv_dir(), f"events_{dt.datetime.utcnow().date()}.csv")
-    new = not os.path.exists(fn)
-    with open(fn,"a",newline="") as f:
-        w=csv.writer(f)
-        if new:
-            w.writerow(["time","event","instrument","direction","grade","score","price",
-                        "ema20","ema50","atr","zone_low","zone_high","risk_pct","units","sl","tp","extra"])
-        w.writerow([now_utc_iso(),event,inst,direction,grade,score,price,ema20,ema50,atr,
-                    zone_low,zone_high,risk_pct,units,sl,tp,extra])
-
-# ----------------------- MAIN LOOP -----------------------
-def main_loop():
-    state=load_state()
-    tt=TimeTools()
-
-    data=DataHandler()
-    news=NewsFilter()
-    sessions=MarketSessions()
-    strat=Strategy()
-    execu=TradeExecutor()
-    partial=PartialCloseEngine(execu)
-    safety=SafetyCheck()
-    validator=OrderValidation()
-    exposure=ExposureEngine()
-    cooldown=CooldownEngine()
-
-    risk_cfg=RiskConfig(
-        max_total_risk_pct=config.RISK_PER_TRADE,
-        risk_pct_grade_a=3.0,
-        risk_pct_grade_b=2.0,
-        max_open_trades_grade_a=config.MAX_TRADES_GRADE_A,
-        max_open_trades_grade_b=config.MAX_TRADES_GRADE_B,
-        cooldown_minutes_after_loss=30,
-        allow_multiple_trades_same_instrument=False,
-        allow_hedging_same_instrument=False
-    )
-    risk=RiskEngine(risk_cfg)
-
-    instruments=["EUR_USD","GBP_USD","USD_JPY","USD_CAD","AUD_USD","NZD_USD","GBP_JPY","EUR_JPY","XAU_USD","BTC_USD"]
-
-    while True:
-        now=dt.datetime.now(dt.timezone.utc)
-        state["last_run"]=now_utc_iso()
-        open(config.HEARTBEAT_PATH,"w").write(f"ALIVE {now_utc_iso()}")
-
-        # session block
-        if config.ENABLE_SESSIONS and not sessions.can_trade(now):
-            csv_log("SESSION_BLOCK")
-            sleep_minutes(1); continue
-
-        safety.check_all()
-
-        for inst in instruments:
-            if cooldown.is_in_cooldown(inst,state):
-                csv_log("COOLDOWN_BLOCK",inst)
-                continue
-
-            reason=news.block_trading(inst,now)
-            if reason:
-                csv_log("NEWS_BLOCK",inst,extra=reason)
-                continue
-
-            candles=data.get_candles(inst,"M15",200)
-            if not candles or len(candles)<50: continue
-
-            close=[c["close"] for c in candles]
-            price=get_pricing(inst)
-            if not price: continue
-
-            # PROFESSIONAL EMA/ATR
-            ema20=strat.ema_engine.ema(close, config.EMA_FAST)
-            ema50=strat.ema_engine.ema(close, config.EMA_SLOW)
-            atr  =strat.atr_engine.atr(candles, period=config.ATR_PERIOD)
-            if atr<=0: continue
-
-            zl=min(c["low"] for c in candles[-10:])
-            zh=max(c["high"] for c in candles[-10:])
-
-            sL=strat.evaluate_signal(inst,"LONG",candles,ema20,ema50,atr,zl,zh,now)
-            sS=strat.evaluate_signal(inst,"SHORT",candles,ema20,ema50,atr,zl,zh,now)
-
-            sig=None
-            if sL and sS: sig=sL if sL.score>=sS.score else sS
-            else: sig=sL or sS
-            if not sig: continue
-
-            csv_log("SIGNAL",inst,sig.direction,sig.grade,sig.score,price["mid"],ema20,ema50,atr,zl,zh)
-
-            tinfo=risk.evaluate_signal(inst,sig.direction,sig.score,sig.grade,price["mid"],atr,state)
-            if not tinfo or not tinfo.get("units"): continue
-
-            units=tinfo["units"]; sl=tinfo["sl"]; tp=tinfo["tp"]
-
-            val=validator.validate(inst,sig.direction,units,sl,tp,price["mid"],config.MIN_DISTANCE_PIPS*0.0001)
-            if not val["is_valid"]:
-                csv_log("VALIDATION_FAIL",inst,extra=str(val["errors"]))
-                continue
-
-            req=OrderRequest(inst,"BUY" if units>0 else "SELL",units,sl,tp,"V10",sig.reason)
-            if not config.ENABLE_ORDER_SUBMISSION:
-                csv_log('SUBMIT_DISABLED', inst, extra='development gate')
-                continue
-            trade_id=execu.open_market_order(req)
-            if trade_id:
-                state["open_trades"][trade_id]={
-                    "instrument":inst,"direction":req.direction,"entry_time":now_utc_iso(),
-                    "entry_price":price["mid"],"sl":sl,"tp":tp,"grade":sig.grade,"score":sig.score
-                }
-                csv_log("TRADE_OPEN",inst,req.direction,sig.grade,sig.score,price["mid"],ema20,ema50,atr,zl,zh,
-                        tinfo.get("risk_pct",""),units,sl,tp,sig.reason)
-
-        # partial close & BE logging is handled inside modules but we record event here:
-        partial.check_and_execute()
-        # (We trust module to write state changes; if needed, CSV can be added inside module)
-
-        save_state(state)
-        sleep_minutes(1)
-
-
-if __name__=="__main__":
-    main_loop()
+        sys.exit(main())
+    except (StateError, KeyboardInterrupt) as exc:
+        logging.error("Stopped: %s", exc.__class__.__name__)
+        sys.exit(3 if isinstance(exc, StateError) else 130)
