@@ -111,7 +111,9 @@ def scan_once() -> int:
     if config.ENABLE_SESSIONS and not MarketSessions().can_trade(now):
         LOG.info("Outside configured session (read-only scan)")
         return 0
-    risk = build_risk_engine()
+    # A successful openTrades GET does not establish an EMPTY account:
+    # pending orders and outcome-unknown attempts require reconciliation.
+    # Signals here are observations, never an ACCEPTED risk decision.
     data = DataHandler()
     strategy = Strategy()
     for instrument in INSTRUMENTS:
@@ -137,10 +139,8 @@ def scan_once() -> int:
         if not signals:
             continue
         signal = max(signals, key=lambda s: s.score)
-        decision = evaluate_signal_risk(risk, signal, now)
-        LOG.info("%s %s grade=%s score=%.2f risk=%s OBSERVE_ONLY",
-                 instrument, signal.direction, signal.grade,
-                 signal.score, decision.code.value)
+        LOG.info("%s %s grade=%s score=%.2f risk=NOT_EVALUATED_UNRECONCILED OBSERVE_ONLY",
+                 instrument, signal.direction, signal.grade, signal.score)
     return 0
 
 

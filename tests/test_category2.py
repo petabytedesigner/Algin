@@ -414,6 +414,45 @@ class TradePlanningTests(unittest.TestCase):
 
 
 
+    def test_P16_observation_never_approves_risk_from_open_trades_only(self):
+        # A successful GET /openTrades does not prove that the account has
+        # no pending orders or unresolved order-submission attempts.
+        from execution.trade_executor import TradeExecutor
+
+        synthetic_signal = SimpleNamespace(
+            instrument="EUR_USD", direction="LONG", grade="A", score=85
+        )
+        candles = [{"close": 1.1, "low": 1.0, "high": 1.2}] * 60
+        with (
+            patch.object(config, "API_KEY", "dummy"),
+            patch.object(config, "ACCOUNT_ID", "dummy"),
+            patch.object(TradeExecutor, "get_open_trades", return_value=[]),
+            patch("main.MarketSessions") as sessions,
+            patch("main.DataHandler") as data,
+            patch("main.Strategy") as strategy,
+            patch("main.evaluate_signal_risk") as risk_eval,
+            patch("main.LOG") as logger,
+        ):
+            sessions.return_value.can_trade.return_value = True
+            data.return_value.get_candles.side_effect = (
+                lambda instrument, *args:
+                candles if instrument == "EUR_USD" else None
+            )
+            strategy.return_value.ema_engine.ema.return_value = 1.1
+            strategy.return_value.atr_engine.atr.return_value = 0.001
+            strategy.return_value.evaluate_signal.side_effect = (
+                lambda instrument, direction, *args:
+                synthetic_signal
+                if instrument == "EUR_USD" and direction == "LONG" else None
+            )
+            self.assertEqual(main.scan_once(), 0)
+            risk_eval.assert_not_called()
+            messages = [str(c) for c in logger.info.call_args_list]
+            self.assertTrue(any("NOT_EVALUATED_UNRECONCILED" in x for x in messages))
+            self.assertFalse(any("risk=ACCEPTED" in x for x in messages))
+
+
+
 class RiskDataTests(unittest.TestCase):
     def setUp(self):
         self.credentials = (

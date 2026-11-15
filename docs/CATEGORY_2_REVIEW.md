@@ -46,6 +46,10 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 
 ## Integrity / release gates
 
+The observation loop intentionally labels signals
+`NOT_EVALUATED_UNRECONCILED`: an empty `openTrades` response is not
+evidence of an empty pending-order or unknown-outcome ledger.
+
 The account, instruments and pricing are three **distinct GETs**: a successful set
 does not prove an atomic broker snapshot. This category refuses broker writes.
 Exposure and loss state (including day-start NAV and realized daily loss) must be **independently verified** and explicitly supplied
