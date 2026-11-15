@@ -156,10 +156,10 @@ class OrderEngine:
                 signal_id=signal_id, instrument=plan.instrument
             )
             raise
-        price_reply = self._read(
-            "/pricing", params={"instruments": plan.instrument}
-        )
         try:
+            price_reply = self._read(
+                "/pricing", params={"instruments": plan.instrument}
+            )
             quote = parse_market_quote(
                 price_reply.body, plan.instrument, rules, now=now,
                 max_age_seconds=config.MAX_QUOTE_AGE_SECONDS,
@@ -190,13 +190,22 @@ class OrderEngine:
             )
             raise
         # The HTTP request is not permitted until this write is durable.
-        self.journal.begin(
-            signal_id=signal_id, attempt_id=attempt_id,
-            request=prepared.payload,
-            risk_pct=format(number(plan.reserved_risk_pct, "reserved risk", positive=True), "f"),
-            margin_home=format(number(plan.estimated_margin_home, "margin", positive=True), "f"),
-            grade=plan.grade,
-        )
+        try:
+            self.journal.begin(
+                signal_id=signal_id, attempt_id=attempt_id,
+                request=prepared.payload,
+                risk_pct=format(number(plan.reserved_risk_pct, "reserved risk", positive=True), "f"),
+                margin_home=format(number(plan.estimated_margin_home, "margin", positive=True), "f"),
+                grade=plan.grade,
+            )
+        except JournalError:
+            self.audit.emit(
+                "RISK", eid=event_id("blocked-journal", signal_id),
+                stage="RISK", outcome="BLOCKED",
+                reason_code="INTENT_JOURNAL_REJECTED",
+                signal_id=signal_id, instrument=plan.instrument
+            )
+            raise
         # Both the intent AND the sanitized attempt event must be durable
         # BEFORE the single permitted (simulated) broker POST.
         self.audit.emit(

@@ -12,6 +12,7 @@ from collections import defaultdict
 
 from analytics.costs import CostError, CostLedger, amount
 from utils.time_tools import parse_utc
+from data.market_sessions import MarketSessions
 
 
 class PerformanceError(ValueError):
@@ -25,6 +26,7 @@ class CompletedTrade:
     session: str
     closed_at: str
     transaction_ids: tuple[str, ...]
+    opened_at: str
 
     def __post_init__(self):
         if (not isinstance(self.trade_id, str) or not self.trade_id.isascii()
@@ -37,6 +39,18 @@ class CompletedTrade:
             parse_utc(self.closed_at)
         except (ValueError, TypeError) as exc:
             raise PerformanceError("Missing closing timestamp") from exc
+        try:
+            opened = parse_utc(self.opened_at)
+            closed = parse_utc(self.closed_at)
+            if opened > closed:
+                raise PerformanceError("Close precedes trade opening")
+            verified_session = MarketSessions().active_session(opened) or "Other"
+            if verified_session != self.session:
+                raise PerformanceError("Session label disagrees with opened_at")
+        except (TypeError, ValueError) as exc:
+            if isinstance(exc, PerformanceError):
+                raise
+            raise PerformanceError("Unverified trade opening timestamp") from exc
         if (not isinstance(self.transaction_ids, tuple)
             or not self.transaction_ids
             or len(self.transaction_ids) != len(set(self.transaction_ids))):

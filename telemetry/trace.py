@@ -42,9 +42,12 @@ class TradeTrace:
             attempt = self.journal.get(attempt_id)
             if _hash_order(attempt["request"]) != attempt["request_hash"]:
                 raise TraceError("Broker order intent hash mismatch")
-            rows = [row for row in self.events.read() if (
-                row["attempt_id"] == attempt_id
-            )]
+            rows = [
+                row for row in self.events.read()
+                if row["attempt_id"] == attempt_id
+                or (not row["attempt_id"]
+                    and row["signal_id"] == attempt["signal_id"])
+            ]
             if any(row["signal_id"] and row["signal_id"] != attempt["signal_id"]
                    for row in rows):
                 raise TraceError("Event/intent signal provenance conflict")
@@ -52,6 +55,17 @@ class TradeTrace:
         except (AuditError, JournalError, StateError, TypeError, ValueError, KeyError) as exc:
             raise TraceError("Untrustworthy trade provenance") from exc
         trade_id = attempt.get("trade_id")
+        for field in ("order_id", "trade_id"):
+            value = attempt.get(field)
+            if value is not None and (
+                not isinstance(value, str) or not value.isascii()
+                or not value.isdecimal() or len(value) > 50
+            ):
+                raise TraceError("Untrusted broker identifier")
+        if not isinstance(attempt.get("signal_id"), str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,128}", attempt["signal_id"]
+        ):
+            raise TraceError("Untrusted signal identity")
         order = attempt["request"]["order"]
         if (not isinstance(order, dict)
             or not isinstance(order.get("instrument"), str)
@@ -61,7 +75,9 @@ class TradeTrace:
             raise TraceError("Unsafe requested instrument")
         try:
             for value in (
-                order["units"], attempt["risk_pct"]
+                order["units"], attempt["risk_pct"],
+                *(attempt.get(x) for x in ("fill_price", "filled_units")
+                  if attempt.get(x) is not None)
             ):
                 numeric = Decimal(str(value))
                 if not numeric.is_finite():
@@ -114,6 +130,7 @@ class TradeTrace:
                 list(record.close_transaction_ids) if record is not None else []
             ),
             "closed_confirmed": bool(record is not None and record.closed),
+            "cycle_ids": sorted({r["cycle_id"] for r in rows if r["cycle_id"]}),
             "event_ids": [r["event_id"] for r in rows],
             "event_codes": [r["reason_code"] for r in rows if r["reason_code"]],
         }

@@ -148,6 +148,18 @@ class AuditEventsTests(unittest.TestCase):
         self.assertFalse(self.audit.path.exists())
 
 
+    def test_P58_disable_any_event_type_without_writing(self):
+        from telemetry.events import EVENT_FLAGS
+        with patch.object(config, "CSV_ENABLED", True):
+            for kind, flag in EVENT_FLAGS.items():
+                with self.subTest(kind=kind), patch.object(config, flag, False):
+                    result = self.audit.emit(
+                        kind, eid=event_id("test", kind), stage="STRATEGY",
+                        outcome="BLOCKED", reason_code="EVENT_DISABLED"
+                    )
+                    self.assertFalse(result)
+            self.assertFalse(self.audit.path.exists())
+
 class HeartbeatTests(unittest.TestCase):
     def setUp(self):
         folder = TemporaryDirectory()
@@ -253,6 +265,22 @@ class IntrabarTests(unittest.TestCase):
                 )
 
 
+    def test_P70_verified_finer_sequence_can_prove_TP_before_SL(self):
+        # All 3 M5 bars reconcile M15 OHLC; earlier sub-bar hits only TP.
+        base = {"complete": True}
+        first = dict(base, time="2026-11-15T09:45:00Z",
+                     open="1.1000", high="1.1030", low="1.0990", close="1.1020")
+        second = dict(base, time="2026-11-15T09:50:00Z",
+                      open="1.1020", high="1.1025", low="1.0970", close="1.0990")
+        third = dict(base, time="2026-11-15T09:55:00Z",
+                     open="1.0990", high="1.1010", low="1.0980", close="1.1001")
+        result = stop_or_target(
+            self.bar, direction="LONG", entry="1.1000",
+            stop="1.0980", target="1.1020", finer=[first, second, third]
+        )
+        self.assertEqual(result.outcome, "TAKE_PROFIT")
+        self.assertIn("CHRONOLOGICAL_FINER_BARS", result.evidence)
+
 def costs(tx, trade, pl, *, instrument="EUR_USD", basis="EXECUTABLE_FILLS",
           financing=0, commission=0, spread=0, slippage=0, fee=0, dividend=0):
     return CostRecord(
@@ -315,7 +343,9 @@ class PerformanceTests(unittest.TestCase):
         self.outcomes = [
             CompletedTrade(str(i), "EUR_USD" if i < 3 else "GBP_USD",
                            "London" if i < 3 else "New York",
-                           f"2026-11-15T10:{i:02d}:00Z", (str(100+i),))
+                           f"2026-11-10T20:{i:02d}:00Z", (str(100+i),),
+                           "2026-11-09T09:00:00Z" if i < 3
+                           else "2026-11-09T18:00:00Z")
             for i in range(1,5)
         ]
 
@@ -368,6 +398,21 @@ class PerformanceTests(unittest.TestCase):
             )
 
 
+    def test_P74_session_must_match_original_open_time(self):
+        with self.assertRaises(PerformanceError):
+            replace(self.outcomes[0], session="New York")
+        with self.assertRaises(PerformanceError):
+            replace(self.outcomes[0], opened_at="2026-11-16T09:00:00Z")
+        with self.assertRaises(PerformanceError):
+            replace(self.outcomes[0], opened_at="2026-11-09T09:00:00")
+
+    def test_P74_empty_report_has_no_fabricated_performance(self):
+        empty = performance_report([], CostLedger(),
+                                   initial_equity_home="1000")
+        self.assertEqual(empty["status"], "NO_TRADES")
+        self.assertIsNone(empty["overall"]["profit_factor"])
+        self.assertIsNone(empty["overall"]["win_rate_pct"])
+
 class OrderIntegrationTests(unittest.TestCase):
     def setUp(self):
         folder = TemporaryDirectory()
@@ -382,6 +427,13 @@ class OrderIntegrationTests(unittest.TestCase):
 
     def test_P65_positive_LONG_and_order_trace_sanitized(self):
         plan, rules, conv = inputs(direction="LONG")
+        self.engine.audit.emit(
+            "SIGNAL", eid=event_id("sig", "signal-long"),
+            stage="STRATEGY", outcome="OBSERVED",
+            signal_id="signal-long", instrument="EUR_USD",
+            direction="LONG", grade="A",
+            candle_time="2026-11-15T09:45:00Z"
+        )
         result = self.engine.submit(
             plan, rules, conv, signal_id="signal-long", now=NOW
         )
@@ -395,10 +447,12 @@ class OrderIntegrationTests(unittest.TestCase):
         self.assertEqual(trace["broker_fill_price"], "1.1002")
         self.assertEqual(trace["broker_trade_id"], "2201")
         self.assertEqual(trace["signal_id"], "signal-long")
+        self.assertEqual(trace["candle_times"], ["2026-11-15T09:45:00Z"])
+        self.assertEqual(len(trace["event_ids"]), 5)
         events = self.engine.audit.read()
         self.assertEqual(
             [x["event_type"] for x in events],
-            ["RISK", "ORDER_ATTEMPT", "ORDER_RESULT", "TRADE"]
+            ["SIGNAL", "RISK", "ORDER_ATTEMPT", "ORDER_RESULT", "TRADE"]
         )
         text = self.engine.audit.path.read_text()
         self.assertNotIn(str(config.API_KEY), text) if config.API_KEY else None
@@ -483,6 +537,44 @@ class OrderIntegrationTests(unittest.TestCase):
         session.request.assert_not_called()
 
 
+    def test_P66_broker_pricing_GET_error_logged_without_POST(self):
+        from broker.execution_validation import PreflightRejected
+        from broker.practice_transport import BrokerCommunicationError
+        plan, rules, conversion = inputs()
+        original = self.transport.read
+        def blocked(path, *, params=None):
+            if path == "/pricing":
+                raise BrokerCommunicationError("Synthetic read failure")
+            return original(path, params=params)
+        with patch.object(self.transport, "read", side_effect=blocked):
+            with self.assertRaises(PreflightRejected):
+                self.engine.submit(
+                    plan, rules, conversion,
+                    signal_id="missing-price", now=NOW
+                )
+        self.assertEqual(self.transport.posts, 0)
+        self.assertFalse(self.journal.path.exists())
+        self.assertIn(
+            "SPREAD_OR_QUOTE_UNVERIFIED",
+            [r["reason_code"] for r in self.engine.audit.read()]
+        )
+
+    def test_P60_trace_rejects_tampered_broker_fill_price(self):
+        from telemetry.trace import TraceError
+        plan, rules, conversion = inputs()
+        filled = self.engine.submit(
+            plan, rules, conversion,
+            signal_id="trace-tamper", now=NOW
+        )
+        raw = json.loads(self.journal.path.read_text())
+        raw["attempts"][filled.attempt_id]["fill_price"] = "Bearer SECRET"
+        self.journal.path.write_text(json.dumps(raw))
+        with self.assertRaises(TraceError):
+            TradeTrace("acct-1", events=self.engine.audit,
+                       journal=self.journal, state=self.store).attempt(
+                           filled.attempt_id
+                       )
+
 class ObservationAuditTests(unittest.TestCase):
     def test_P59_P61_no_session_code_and_cycle_completion(self):
         with TemporaryDirectory() as folder:
@@ -518,6 +610,20 @@ class ObservationAuditTests(unittest.TestCase):
                 self.assertEqual(HeartbeatStore("fake-bad").read()["state"], "BLOCKED")
                 reasons = [x["reason_code"] for x in AuditEvents("fake-bad").read()]
                 self.assertIn("BROKER_SNAPSHOT_UNVERIFIED", reasons)
+
+
+    def test_P59_strategy_returns_detailed_fixed_rejection_code(self):
+        from strategy.strategy import Strategy
+        from test_category5 import candles
+        strategy = Strategy()
+        rejected = strategy.evaluate_signal(
+            "EUR_USD", "SHORT", candles(), 1.1020, 1.1008,
+            .0010, 1, 1.2, NOW
+        )
+        self.assertIsNone(rejected)
+        self.assertEqual(strategy.last_rejection_code,
+                         "TREND_MISMATCH_OR_RESET")
+
 
 
 if __name__ == "__main__":
