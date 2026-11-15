@@ -1,4 +1,4 @@
-"""Category-4 read-only entrypoint; broker mutations are not implemented here.
+"""Category-5 read-only entrypoint; broker mutations are not implemented here.
 
 Strategy and risk output remains advisory. Break-even and partial-close
 intents may be prepared locally, but real broker mutations are disabled.
@@ -8,10 +8,14 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from functools import lru_cache
 from datetime import datetime, timezone
 
 import config
 from data.data_handler import DataHandler
+from data.candle_validation import CandleDataError, validate_candles
+from data.candle_gate import CandleGate, CandleGateError
+from data.news_filter import NewsFilter
 from data.market_sessions import MarketSessions
 from broker.account_reconciler import AccountReconciler, ReconcileError
 from execution.trade_management import ManagementLoop
@@ -97,6 +101,15 @@ def build_trade_plan(signal, atr, account, instrument, quote, exposure, losses, 
     )
 
 
+@lru_cache(maxsize=1)
+def build_news_filter():
+    """One verified calendar cache across observation cycles."""
+    return NewsFilter(
+        ttl_minutes=config.NEWS_CACHE_TTL_MINUTES,
+        max_age_minutes=config.NEWS_CACHE_MAX_AGE_MINUTES
+    )
+
+
 def scan_once() -> int:
     """One read-only observation cycle; fail closed on broker uncertainty."""
     if not config.API_KEY or not config.ACCOUNT_ID:
@@ -120,11 +133,35 @@ def scan_once() -> int:
     # Signals here are observations, never an ACCEPTED risk decision.
     data = DataHandler()
     strategy = Strategy()
+    gate = CandleGate(config.ACCOUNT_ID)
+    calendar = build_news_filter()
     for instrument in INSTRUMENTS:
         # Historical V10 inputs; category 5 must validate completed candles.
         candles = data.get_candles(instrument, "M15", 200)
         if not candles or len(candles) < 50:
-            LOG.info("%s: no usable history", instrument)
+            LOG.info("%s: no usable completed M15 history", instrument)
+            continue
+        try:
+            candles = validate_candles(
+                candles, now=now, min_count=50,
+                max_age_minutes=config.SIGNAL_CANDLE_MAX_AGE_MINUTES
+            )
+        except (CandleDataError, ValueError) as exc:
+            LOG.warning("%s: blocked invalid M15 data: %s", instrument, exc)
+            continue
+        # Do not consume the candle when the instrument is not tradeable.
+        quote = data.get_price(instrument)
+        if not MarketSessions().instrument_tradeable(
+            instrument, now=now, broker_tradeable=quote is not None
+        ):
+            LOG.info("%s: instrument not verified tradeable", instrument)
+            continue
+        try:
+            if not gate.claim(instrument, candles[-1]["time"]):
+                LOG.debug("%s: completed M15 candle already processed", instrument)
+                continue
+        except CandleGateError as exc:
+            LOG.warning("%s: M15 checkpoint unavailable: %s", instrument, exc)
             continue
         closes = [c["close"] for c in candles]
         fast = strategy.ema_engine.ema(closes, config.EMA_FAST)
@@ -132,8 +169,10 @@ def scan_once() -> int:
         atr = strategy.atr_engine.atr(candles, period=config.ATR_PERIOD)
         if fast is None or slow is None or not atr or atr <= 0:
             continue
-        zone_low = min(c["low"] for c in candles[-10:])
-        zone_high = max(c["high"] for c in candles[-10:])
+        # Legacy arguments retained for the Strategy public interface.
+        # Category 5 derives the true retest zone from PRE-breakout swings.
+        zone_low = min(c["low"] for c in candles[:-1][-10:])
+        zone_high = max(c["high"] for c in candles[:-1][-10:])
         signals = [
             strategy.evaluate_signal(instrument, direction, candles, fast, slow,
                                      atr, zone_low, zone_high, now)
@@ -145,6 +184,9 @@ def scan_once() -> int:
         signal = max(signals, key=lambda s: s.score)
         LOG.info("%s %s grade=%s score=%.2f risk=NOT_EVALUATED_UNRECONCILED OBSERVE_ONLY",
                  instrument, signal.direction, signal.grade, signal.score)
+        news_status = calendar.block_trading(instrument, now)
+        if news_status is not None:
+            LOG.warning("%s: entry blocked by news gate: %s", instrument, news_status)
     return 0
 
 
@@ -167,7 +209,7 @@ def manage_once() -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Algin Category 4 read-only baseline")
+    parser = argparse.ArgumentParser(description="Algin Category 5 read-only baseline")
     parser.add_argument("--check", action="store_true", help="Verify imports without network")
     parser.add_argument("--once", action="store_true", help="One legacy read-only signal scan")
     parser.add_argument("--manage-once", action="store_true",
@@ -175,10 +217,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if config.ORDER_WRITES_ENABLED:
-        LOG.error("Category-4 build rejects any order-enabled configuration")
+        LOG.error("Category-5 build rejects any order-enabled configuration")
         return 3
     if args.check:
-        LOG.info("Category-4 imports OK; broker writes DISABLED")
+        LOG.info("Category-5 imports OK; broker writes DISABLED")
         return 0
     if args.manage_once:
         return manage_once()

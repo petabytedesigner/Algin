@@ -269,6 +269,7 @@ class Category1Tests(unittest.TestCase):
         from data.data_handler import DataHandler
         data = {"candles": [{
             "time": "2026-11-15T09:00:00Z",
+            "complete": True,
             "mid": {"o": "1.1", "h": "1.2", "l": "1.0", "c": "1.1"}
         }]}
         with patch("data.data_handler.safe_request",

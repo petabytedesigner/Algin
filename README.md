@@ -1,4 +1,4 @@
-# Algin — development baseline: Categories 1–4
+# Algin — development baseline: Categories 1–5
 
 Categories 1 and 2 implement the foundation, read-only broker contracts and
 pure risk-based trade preparation. The active entrypoint remains **OBSERVE ONLY**.
@@ -91,3 +91,25 @@ trades are not adopted by guessing missing data. See
 Passing offline broker-fixture tests does not demonstrate account-wide live
 recovery, real slippage, or operational readiness. The system stays
 OBSERVE_ONLY pending separately authorized and verified broker-write release.
+
+## Category 5 signal and feed-quality rules
+
+M15 signal input must carry OANDA complete=true and ordered, nonduplicated,
+finite OHLC values. The latest incomplete broker bar is excluded. A bar is
+considered only after its 15-minute close. A durable per-account checkpoint
+limits strategy analysis to once per completed bar, including after restart.
+No signal uses a retest zone built from its own candle.
+
+EMA20/50 + ATR remain the underlying strategy. LONG/SHORT must agree with
+trend and bullish/bearish candle confirmation. The breakout requires a close
+beyond a previously confirmed swing, then a subsequent retest within four
+bars; an unimplemented liquidity_sweep does not lower score. Pattern quality
+applies a real penalty, and an EMA reset zone blocks entry.
+
+Session checks use IANA DST-aware London, Tokyo and New York zones with the
+New York FX-week boundary. Current broker tradeable pricing and quote age are
+verified independently. Without a verified news provider, P56 calendar state
+is NEWS_UNKNOWN and **new entries must remain blocked**; P55 is explicitly
+external. These are read-only development checks, not live trading release.
+
+See docs/CATEGORY_5_REVIEW.md. Broker writes remain DISABLED.

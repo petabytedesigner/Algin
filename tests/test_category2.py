@@ -422,18 +422,23 @@ class TradePlanningTests(unittest.TestCase):
         synthetic_signal = SimpleNamespace(
             instrument="EUR_USD", direction="LONG", grade="A", score=85
         )
-        candles = [{"close": 1.1, "low": 1.0, "high": 1.2}] * 60
+        candles = [{"time": "2026-11-15T09:45:00Z",
+                    "close": 1.1, "open": 1.1,
+                    "low": 1.0, "high": 1.2, "complete": True}] * 60
         with (
             patch.object(config, "API_KEY", "dummy"),
             patch.object(config, "ACCOUNT_ID", "dummy"),
             patch.object(TradeExecutor, "get_open_trades", return_value=[]),
             patch("main.MarketSessions") as sessions,
             patch("main.DataHandler") as data,
+            patch("main.validate_candles", return_value=candles),
+            patch("main.CandleGate") as checkpoint,
             patch("main.Strategy") as strategy,
             patch("main.evaluate_signal_risk") as risk_eval,
             patch("main.LOG") as logger,
         ):
             sessions.return_value.can_trade.return_value = True
+            checkpoint.return_value.claim.return_value = True
             data.return_value.get_candles.side_effect = (
                 lambda instrument, *args:
                 candles if instrument == "EUR_USD" else None

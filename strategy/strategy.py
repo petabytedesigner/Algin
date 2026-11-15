@@ -1,56 +1,46 @@
+"""Algin closed-candle EMA20/50 + ATR + confirmed BOS/retest strategy.
+
+No broker orders. Historical structure is fixed before breakout; signal bar
+cannot create its own retest zone. The public evaluate_signal interface stays
+compatible with prior categories; old caller-provided zone is intentionally
+ignored to avoid including the signal candle itself (P41).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+import math
+from typing import Any, Dict, List, Optional
 
-from .structure_engine import StructureEngine
-from .retest_engine import RetestEngine
-from .trend_engine import TrendEngine
-from .ema_engine import EMAEngine
+from data.candle_validation import CandleDataError, validate_candles
+from risk.scoring_engine import ScoringConfig, ScoringEngine
 from .atr_engine import ATREngine
+from .breakout_retest import BreakoutRetest
 from .candle_rules import CandleRules
+from .ema_engine import EMAEngine
 from .pattern_filters import PatternFilters
-from risk.scoring_engine import ScoringEngine, ScoringConfig
+from .retest_engine import RetestEngine
+from .structure_engine import StructureEngine
+from .trend_engine import TrendEngine
 
 
 @dataclass
 class StrategySignal:
-    """Rezultati i strategjisë për një sinjal të vetëm.
-
-    Ky objekt NUK hap tregti vetë; përdoret nga layer-i më lart
-    (p.sh. main) për të ndërtuar TradeCandidate dhe për t'ia
-    kaluar RiskEngine-it.
-    """
     instrument: str
-    direction: str  # 'LONG' ose 'SHORT'
+    direction: str
     score: float
-    grade: str      # 'A', 'B', 'C', 'D'
+    grade: str
     metrics: Dict[str, float]
     reason: str
     timestamp: datetime
 
 
 class Strategy:
-    """Bërthama e logjikës së sinjalit për robotin Algin.
+    """Pure signal quality gate: breakout -> retest -> confirmation only."""
 
-    Kombinon:
-    - Strukturën (BOS / CHoCH)
-    - Break & Retest
-    - Trend (EMA20/50 + ATR)
-    - Cilësinë e qiririt
-    - Pattern filters (konsolidim, inside bars, ranging, spikes)
-    - Scoring engine → score 0–100 → Grade A/B/C/D
-
-    Kjo klasë është full-dinamike: nuk vendos risk-in, vetëm cilësinë
-    e sinjalit dhe nëse duhet marrë në konsideratë.
-    """
-
-    def __init__(
-        self,
-        scoring_config: Optional[ScoringConfig] = None,
-    ):
+    def __init__(self, scoring_config: Optional[ScoringConfig] = None):
         self.structure_engine = StructureEngine()
+        self.breakout_retest = BreakoutRetest(expiry_bars=4)
         self.retest_engine = RetestEngine()
         self.trend_engine = TrendEngine()
         self.ema_engine = EMAEngine()
@@ -60,127 +50,88 @@ class Strategy:
         self.scoring = ScoringEngine(scoring_config or ScoringConfig())
 
     def evaluate_signal(
-        self,
-        instrument: str,
-        direction: str,               # 'LONG' ose 'SHORT'
-        candles: List[Dict[str, Any]],
-        ema20: float,
-        ema50: float,
-        atr: float,
-        zone_low: float,
-        zone_high: float,
-        timestamp: datetime,
+        self, instrument: str, direction: str,
+        candles: List[Dict[str, Any]], ema20: float, ema50: float,
+        atr: float, zone_low: float, zone_high: float, timestamp: datetime,
     ) -> Optional[StrategySignal]:
-        """Analizon një sinjal të mundshëm Break & Retest.
-
-        Kthen:
-        - StrategySignal nëse sinjali kalon filtrat bazë
-        - None nëse sinjali hidhet poshtë
-
-        Shënim:
-        - 'candles' duhet të jetë listë qirinjsh (open, high, low, close, time)
-        - qiriu i fundit konsiderohet si qiri i retestit / sinjalit
-        """
-        if len(candles) < 20:
-            return None  # nuk kemi mjaftueshëm histori
-
-        last_candle = candles[-1]
-
-        # 1) Strukturë: BOS / CHoCH / drejtim
-        structure = self.structure_engine.detect(candles)
-
-        # 2) Trend: EMA20/50 + ATR
+        """Return a signal only when all directional and data gates pass."""
+        if direction not in ("LONG", "SHORT"):
+            return None
+        if not isinstance(instrument, str) or "_" not in instrument:
+            return None
+        if any(not isinstance(x, (int, float)) or not math.isfinite(x)
+               or x <= 0 for x in (ema20, ema50, atr)):
+            return None
+        try:
+            clean = validate_candles(candles, now=timestamp, min_count=50)
+        except (CandleDataError, ValueError, TypeError):
+            return None
+        last = clean[-1]
         trend = self.trend_engine.evaluate(
-            price=last_candle["close"],
-            ema20=ema20,
-            ema50=ema50,
-            atr=atr,
+            price=last["close"], ema20=ema20, ema50=ema50, atr=atr
         )
-
-        # 3) Retest: qiriu i fundit ndaj zonës së dhënë
-        retest = self.retest_engine.check_retest(
-            candle=last_candle,
-            zone_low=zone_low,
-            zone_high=zone_high,
-            direction=direction,
-        )
-
-        if not retest.is_valid:
-            return None  # pa retest të vlefshëm, nuk ka sinjal
-
-        # 4) Cilësia e qiririt
-        candle_q = self.candle_rules.evaluate(last_candle)
-
-        if candle_q.is_doji:
-            return None  # nuk hyjmë me doji
-
-        # 5) Pattern filters (5 qirinjtë e fundit)
-        pattern = self.pattern_filters.check(
-            candles=candles,
-            atr=atr,
-            trend_direction=trend.direction,
-        )
-
-        if not pattern.is_valid:
+        wanted = "UP" if direction == "LONG" else "DOWN"
+        if trend.direction != wanted or trend.is_overextended or trend.in_reset_zone:
             return None
 
-        # 6) EMA alignment
-        ema_align = self.ema_engine.ema_alignment(ema20, ema50)
+        # Explicit bullish LONG / bearish SHORT candle confirmation.
+        if (direction == "LONG" and last["close"] <= last["open"]) or (
+            direction == "SHORT" and last["close"] >= last["open"]
+        ):
+            return None
 
-        # 7) ATR normalized për scoring
-        atr_norm = self.atr_engine.normalize_for_scoring(
-            atr_val=atr,
-            price=last_candle["close"],
+        sequence = self.breakout_retest.confirm(clean, direction, atr)
+        if sequence is None or sequence.state != "CONFIRMED":
+            return None
+        # All structural evidence must exist *by the breakout candle*, not
+        # be added retroactively by the retest/signal candle.
+        structure = self.structure_engine.detect(
+            clean[:sequence.breakout_index + 1]
         )
+        if not structure.bos or structure.direction != wanted:
+            return None
 
-        # 8) Përgatisim metrikat për scoring engine
-        metrics: Dict[str, float] = {
+        retest = self.retest_engine.check_retest(
+            last, sequence.zone_low, sequence.zone_high, direction
+        )
+        if not retest.is_valid:
+            return None
+        candle_quality = self.candle_rules.evaluate(last)
+        if candle_quality.is_doji:
+            return None
+        patterns = self.pattern_filters.check(
+            candles=clean, atr=atr, trend_direction=trend.direction
+        )
+        if not patterns.is_valid:
+            return None
+        ema_score = self.ema_engine.ema_alignment(ema20, ema50)
+        atr_score = self.atr_engine.normalize_for_scoring(
+            atr_val=atr, price=last["close"]
+        )
+        metrics = {
             "trend_strength": trend.strength,
             "structure_quality": structure.quality,
-            "retest_quality": retest.quality,
-            "candle_quality": candle_q.quality,
-            "ema_alignment": ema_align,
-            "atr_normalized": atr_norm,
-            # liquidity_sweep për tani 0.0 — mund të shtohet më vonë
-            "liquidity_sweep": 0.0,
+            "retest_quality": min(sequence.retest_quality, retest.quality),
+            "candle_quality": candle_quality.quality,
+            "ema_alignment": ema_score,
+            "atr_normalized": atr_score,
+            "pattern_quality": patterns.quality,
+            "in_reset_zone": False,
+            # liquidity_sweep is NOT measured and has NO denominator weight.
         }
-
-        # Mund të ulin pak score-in nëse pattern_quality < 1.0
-        if pattern.quality < 1.0:
-            metrics["pattern_quality"] = pattern.quality
-        else:
-            metrics["pattern_quality"] = 1.0
-
-        # 9) Score total & Grade
-        score = self.scoring.score(metrics)
-        grade = self.scoring.grade_from_score(score)
-
-        # Nëse score është shumë i ulët, nuk e kthejmë si sinjal
-        if score < 40.0:
+        try:
+            score = self.scoring.score(metrics)
+            grade = self.scoring.grade_from_score(score)
+        except ValueError:
             return None
-
-        reason_parts = []
-        if structure.bos:
-            reason_parts.append("BOS")
-        if structure.choch:
-            reason_parts.append("CHoCH")
-        if trend.direction:
-            reason_parts.append(f"Trend {trend.direction}")
-        if pattern.quality < 1.0:
-            reason_parts.append("Pattern jo perfekt")
-        if retest.quality > 0.8:
-            reason_parts.append("Retest i pastër")
-        if candle_q.is_strong:
-            reason_parts.append("Qiri i fortë")
-
-        reason = ", ".join(reason_parts) or "Sinjal i vlefshëm sipas rregullave."
-
+        if score < self.scoring.config.grade_c_min:
+            return None
+        reason = ["CHoCH" if structure.choch else "BOS",
+                  "Breakout->Retest", f"Trend {trend.direction}"]
+        if patterns.quality < 1:
+            reason.append("Pattern penalty applied")
         return StrategySignal(
-            instrument=instrument,
-            direction=direction,
-            score=score,
-            grade=grade,
-            metrics=metrics,
-            reason=reason,
-            timestamp=timestamp,
+            instrument=instrument, direction=direction, score=score,
+            grade=grade, metrics=metrics,
+            reason=", ".join(reason), timestamp=timestamp
         )
