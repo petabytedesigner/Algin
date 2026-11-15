@@ -35,6 +35,8 @@ class RetestEngine:
         - zone_low / zone_high: kufijtë e zonës së retestit
         - direction: 'LONG' ose 'SHORT'
         """
+        if direction not in ("LONG", "SHORT"):
+            return RetestResult(False,"Invalid direction",0.0,None)
         high = candle["high"]
         low = candle["low"]
         close = candle["close"]

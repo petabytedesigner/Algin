@@ -1,6 +1,6 @@
 
-from utils.utils_v10 import log
-import config_v10 as config
+from utils.common import log
+import config as config
 import datetime as dt
 import csv, os
 
@@ -35,7 +35,7 @@ class PartialCloseEngine:
     """
 
     def __init__(self, executor):
-        self.executor = executor  # pritet TradeExecutorV10
+        self.executor = executor  # pritet TradeExecutor
 
     def check_and_execute(self):
         open_trades = self.executor.get_open_trades()
