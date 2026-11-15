@@ -16,6 +16,7 @@
 Engineering improvements across six categories are partially implemented and require additional test coverage and broker verification. No conclusion about net profitability is supported by the historical logTX archive.
 
 ## Outstanding technical limitations
+- The daily NAV loss baseline is the first observation of each UTC day; it is not adjusted for deposits/withdrawals or losses occurring before a bot starts. Conservative drawdown guards can block unnecessarily and require manual review.
 - The complete real-broker account-event journal and lastTransactionID incremental recovery have not been exercised against an account.
 - Delayed or closed fills from lost HTTP responses require additional reconciliation methods and may continue to block entries (safe but not autonomous).
 - Refined structure/scoring behavior needs deterministic fixtures and holdout testing.

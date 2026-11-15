@@ -28,7 +28,8 @@ class StateStore:
     def initial(self) -> dict:
         return {"version": 2, "account_id": self.account_id, "environment": "practice",
                 "trades": {}, "intents": {}, "last_candles": {},
-                "last_transaction_id": None, "cooldown": {}, "events": {}}
+                "last_transaction_id": None, "cooldown": {}, "events": {},
+                "risk_limits": {}}
 
     def load(self) -> dict:
         if not self.path.exists():
@@ -39,7 +40,7 @@ class StateStore:
             raise StateError("State corrupt/unreadable; manual recovery required") from exc
         if not isinstance(data, dict) or data.get("version") != 2 or data.get("account_id") != self.account_id or data.get("environment") != "practice":
             raise StateError("State identity/schema mismatch; refuse to trade")
-        for k in ("trades", "intents", "last_candles", "cooldown", "events"):
+        for k in ("trades", "intents", "last_candles", "cooldown", "events", "risk_limits"):
             if not isinstance(data.get(k), dict):
                 raise StateError("State section missing or corrupt: " + k)
         return data

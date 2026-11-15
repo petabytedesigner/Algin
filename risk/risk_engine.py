@@ -57,6 +57,7 @@ class RiskConfig:
     max_total_risk_pct: float = 6.0  # limiti total (p.sh. 6%)
     risk_pct_grade_a: float = 3.0
     risk_pct_grade_b: float = 2.0
+    max_shared_currency_risk_pct: float = 2.0
     max_open_trades_grade_a: int = 2
     max_open_trades_grade_b: int = 3
     cooldown_minutes_after_loss: int = 30
@@ -76,6 +77,7 @@ class RiskDecisionCode(str, Enum):
     ACCEPTED = "ACCEPTED"
     REJECT_GRADE = "REJECT_GRADE"
     REJECT_TOTAL_RISK = "REJECT_TOTAL_RISK"
+    REJECT_CURRENCY_CONCENTRATION = "REJECT_CURRENCY_CONCENTRATION"
     REJECT_TOO_MANY_A = "REJECT_TOO_MANY_A"
     REJECT_TOO_MANY_B = "REJECT_TOO_MANY_B"
     REJECT_INSTRUMENT_COOLDOWN = "REJECT_INSTRUMENT_COOLDOWN"
@@ -131,7 +133,7 @@ class RiskEngine:
         Nuk verifikon strukturën, EMA, ATR, etj. – vetëm risk & ekspozim.
         """
         cfg = self.config
-        numbers = [candidate.requested_risk_pct, cfg.max_total_risk_pct, cfg.risk_pct_grade_a, cfg.risk_pct_grade_b] + [p.risk_pct for p in open_positions]
+        numbers = [candidate.requested_risk_pct, cfg.max_total_risk_pct, cfg.risk_pct_grade_a, cfg.risk_pct_grade_b, cfg.max_shared_currency_risk_pct] + [p.risk_pct for p in open_positions]
         if not all(math.isfinite(float(x)) and float(x) > 0 for x in numbers):
             return RiskDecision(False, RiskDecisionCode.REJECT_TOTAL_RISK, "Invalid, zero or non-finite risk")
         # 1) Filtri i gradës – C dhe D nuk lejohen
@@ -164,6 +166,18 @@ class RiskEngine:
                     f"{cfg.max_total_risk_pct:.2f}%."
                 ),
             )
+
+        # Conservative common-currency exposure, no assumed diversification
+        currency_pair = candidate.instrument.split("_")
+        if len(currency_pair) != 2 or any(not c for c in currency_pair):
+            return RiskDecision(False, RiskDecisionCode.REJECT_CURRENCY_CONCENTRATION,
+                                "Invalid instrument currency identity")
+        for currency in set(currency_pair):
+            associated = sum(float(p.risk_pct) for p in open_positions
+                             if currency in p.instrument.split("_"))
+            if associated + requested_risk > cfg.max_shared_currency_risk_pct + 1e-9:
+                return RiskDecision(False, RiskDecisionCode.REJECT_CURRENCY_CONCENTRATION,
+                                    "Shared currency risk limit: " + currency)
 
         # 4) Kontrollo numrin e tregtive A dhe B
         num_a = sum(1 for p in open_positions if p.grade == Grade.A)

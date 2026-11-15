@@ -41,6 +41,7 @@ class TradingEngine:
             max_total_risk_pct=config.MAX_TOTAL_RISK_PCT,
             risk_pct_grade_a=config.GRADE_A_RISK_PCT,
             risk_pct_grade_b=config.GRADE_B_RISK_PCT,
+            max_shared_currency_risk_pct=config.MAX_SHARED_CURRENCY_RISK_PCT,
             max_open_trades_grade_a=config.MAX_TRADES_GRADE_A,
             max_open_trades_grade_b=config.MAX_TRADES_GRADE_B,
             cooldown_minutes_after_loss=config.COOLDOWN_MINUTES,
@@ -62,9 +63,37 @@ class TradingEngine:
         for t in open_trades:
             if not isinstance(t, dict) or not t.get("id") or t.get("state") != "OPEN":
                 raise BrokerError("Malformed open trade snapshot")
+        self._update_equity_limits(account["NAV"], datetime.now(timezone.utc))
         self.state["last_transaction_id"] = response.get("lastTransactionID")
         self.store.save(self.state)
         return account, {str(t["id"]): t for t in open_trades}, pending
+
+    def _update_equity_limits(self, nav, now):
+        """Persistent NAV drawdown guard; funding changes need manual review."""
+        amount = number(nav)
+        if amount <= 0:
+            raise BrokerError("Cannot calculate drawdown from invalid NAV")
+        limits = self.state["risk_limits"]
+        current_date = now.date().isoformat()
+        if limits.get("day") != current_date:
+            limits["day"] = current_date
+            limits["start_nav"] = str(amount)
+        old_peak = number(limits["peak_nav"]) if limits.get("peak_nav") else amount
+        limits["peak_nav"] = str(max(old_peak, amount))
+        limits["last_nav"] = str(amount)
+
+    def _drawdown_gate(self):
+        limits = self.state["risk_limits"]
+        if not all(limits.get(k) for k in ("start_nav", "peak_nav", "last_nav")):
+            return False, "Equity risk baseline unavailable"
+        start, peak, current = (number(limits[k]) for k in ("start_nav", "peak_nav", "last_nav"))
+        if min(start, peak, current) <= 0:
+            return False, "Invalid equity risk baseline"
+        if 100 * (start-current) / start >= number(config.MAX_DAILY_LOSS_PCT):
+            return False, "Daily NAV loss limit"
+        if 100 * (peak-current) / peak >= number(config.MAX_ACCOUNT_DRAWDOWN_PCT):
+            return False, "NAV drawdown limit"
+        return True, ""
 
     def _adopt_intent(self, intent_id, intent, observed):
         tid = str(observed["id"])
@@ -201,6 +230,9 @@ class TradingEngine:
                     self.executor.partial_close(self.state, tid, partial, current)
 
     def _entries_allowed(self, now, broker_trades, pending):
+        allowed_equity, equity_reason = self._drawdown_gate()
+        if not allowed_equity:
+            return False, equity_reason
         if self._unresolved():
             return False, "Unresolved broker mutation"
         if pending:
