@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 from datetime import datetime
+import math
 
 @dataclass
 class ExposureConfig:
@@ -21,4 +22,5 @@ class ExposureEngine:
         return sum(p.risk_pct for p in positions)
 
     def can_open(self, positions: List[Position], requested: float) -> bool:
-        return (self.total_risk(positions) + requested) <= self.config.max_total_risk_pct
+        vals = [requested, self.config.max_total_risk_pct] + [p.risk_pct for p in positions]
+        return all(math.isfinite(float(v)) and float(v)>0 for v in vals) and (self.total_risk(positions) + requested) <= self.config.max_total_risk_pct

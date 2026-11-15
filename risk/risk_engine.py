@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import math
 
 
 class Grade(str, Enum):
@@ -50,7 +51,7 @@ class RiskConfig:
     """Konfigurim fleksibël për risk engine.
 
     Këtu vendosen limitet e ekspozimit, risk për grade, cooldown, etj.
-    Në praktikë këto vlera do vijnë nga config_v10.py, por i mbajmë
+    Në praktikë këto vlera do vijnë nga config.py, por i mbajmë
     këtu në një strukturë të vetëm për t'i kaluar lehtësisht në RiskEngine.
     """
     max_total_risk_pct: float = 6.0  # limiti total (p.sh. 6%)
@@ -130,7 +131,9 @@ class RiskEngine:
         Nuk verifikon strukturën, EMA, ATR, etj. – vetëm risk & ekspozim.
         """
         cfg = self.config
-
+        numbers = [candidate.requested_risk_pct, cfg.max_total_risk_pct, cfg.risk_pct_grade_a, cfg.risk_pct_grade_b] + [p.risk_pct for p in open_positions]
+        if not all(math.isfinite(float(x)) and float(x) > 0 for x in numbers):
+            return RiskDecision(False, RiskDecisionCode.REJECT_TOTAL_RISK, "Invalid, zero or non-finite risk")
         # 1) Filtri i gradës – C dhe D nuk lejohen
         if candidate.grade not in (Grade.A, Grade.B):
             return RiskDecision(
@@ -225,7 +228,7 @@ class RiskEngine:
 
         Përdoret për të futur instrumentin në cooldown.
         """
-        when = when or datetime.utcnow()
+        when = when or datetime.now(timezone.utc)
         state = self._instrument_state.get(instrument) or InstrumentRiskState()
         state.last_loss_at = when
         self._instrument_state[instrument] = state

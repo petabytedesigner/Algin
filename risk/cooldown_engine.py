@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 @dataclass
@@ -17,7 +17,7 @@ class CooldownEngine:
         self._state: dict[str, InstrumentCooldownState] = {}
 
     def register_loss(self, instrument: str, when: Optional[datetime]=None):
-        when = when or datetime.utcnow()
+        when = when or datetime.now(timezone.utc)
         state = self._state.get(instrument) or InstrumentCooldownState()
         state.last_loss_at = when
         self._state[instrument] = state
@@ -26,7 +26,9 @@ class CooldownEngine:
         state = self._state.get(instrument)
         if not state or not state.last_loss_at:
             return False
-        return now < state.last_loss_at + timedelta(minutes=self.config.minutes_after_loss)
+        now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now
+        last = state.last_loss_at.replace(tzinfo=timezone.utc) if state.last_loss_at.tzinfo is None else state.last_loss_at
+        return now < last + timedelta(minutes=self.config.minutes_after_loss)
 
     def load_state(self, instrument: str, state: InstrumentCooldownState):
         self._state[instrument] = state
