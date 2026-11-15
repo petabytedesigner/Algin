@@ -21,7 +21,7 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 | Item | Implementation | Limitation / verification boundary |
 |---|---|---|
 | P5 | `main.build_trade_plan` maps signal, ATR, context to a preview-only `TradePlan` | No order submission |
-| P9 | Risk-per-grade separate from total reserved risk | Policy must be approved for production |
+| P9 | Risk-per-grade separate from total reserved risk; legacy `ExposureEngine` aligned to the same 1% cap | Policy must be approved for production |
 | P10 | Decimal-only positive finite inputs, validated configurations | No external untrusted input treated as safe |
 | P11 | Read-only full OANDA Account details; balance/NAV/currency/margin and count checks | No live OANDA credentials in CI |
 | P12 | `includeHomeConversions=true`, quote `accountLoss`, base `positionValue` | Missing conversions block; discontinued quote factors ignored |

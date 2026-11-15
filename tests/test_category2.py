@@ -399,6 +399,21 @@ class TradePlanningTests(unittest.TestCase):
 
 
 
+    def test_P9_legacy_exposure_engine_shares_1pct_cap(self):
+        from risk.exposure_engine import ExposureEngine, Position
+        old = ExposureEngine()
+        self.assertEqual(old.config.max_total_risk_pct, 1.0)
+        position = Position("GBP_USD", 0.5, NOW)
+        self.assertTrue(old.can_open([position], 0.5))
+        self.assertFalse(old.can_open([position], 0.6))
+        self.assertFalse(old.can_open([position], float("nan")))
+        self.assertFalse(old.can_open([], 0))
+        with self.assertRaises(ValueError):
+            old.total_risk([Position("EUR_USD", float("nan"), NOW)])
+        self.assertFalse(old.can_open([Position("EUR_USD", -1, NOW)], 0.5))
+
+
+
 class RiskDataTests(unittest.TestCase):
     def setUp(self):
         self.credentials = (
