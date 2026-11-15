@@ -1,19 +1,32 @@
+"""Algin risk decision engine.
+
+Pure validation/limits only. The broker-exposure snapshot must be reconciled by
+the calling layer; an empty list is not proof that a broker account is flat.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
+from enum import Enum
+from typing import Dict, List, Optional
+
 from utils.time_tools import require_utc, utc_now
 
 
-class Grade(str, Enum):
-    """Signal quality grade.
+def _positive_decimal(value, field: str) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{field}: invalid")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"{field}: invalid decimal") from exc
+    if not result.is_finite() or result <= 0:
+        raise ValueError(f"{field}: must be finite and positive")
+    return result
 
-    A = sinjal premium, i pastër, me probabilitet më të lartë.
-    B = sinjal i mirë, por jo aq perfekt sa A.
-    C/D = nuk lejohen për hapje tregtish.
-    """
+
+class Grade(str, Enum):
     A = "A"
     B = "B"
     C = "C"
@@ -22,62 +35,52 @@ class Grade(str, Enum):
 
 @dataclass
 class TradeCandidate:
-    """Kandidat për tregti që po vlerësohet nga risk engine.
-
-    Kjo strukturë përdoret nga strategjia kur ka një sinjal të ri.
-    RiskEngine nuk vendos logjikën e sinjalit – vetëm riskun dhe ekspozimin.
-    """
     instrument: str
-    direction: str  # "LONG" ose "SHORT"
+    direction: str
     grade: Grade
-    score: float  # rezultat numerik nga scoring_engine (p.sh. 0–100)
-    requested_risk_pct: float  # sa % e balancës do përdoret në këtë tregti
+    score: float
+    requested_risk_pct: float
     timestamp: datetime
 
 
 @dataclass
 class OpenPositionRisk:
-    """Përfaqëson një tregti tashmë të hapur, nga këndvështrimi i riskut."""
     trade_id: str
     instrument: str
-    direction: str  # "LONG" ose "SHORT"
+    direction: str
     grade: Grade
-    risk_pct: float  # risk fillestar i planifikuar (jo P/L aktual)
+    risk_pct: float
     opened_at: datetime
 
 
 @dataclass
 class RiskConfig:
-    """Konfigurim fleksibël për risk engine.
-
-    Këtu vendosen limitet e ekspozimit, risk për grade, cooldown, etj.
-    Në praktikë këto vlera do vijnë nga config.py, por i mbajmë
-    këtu në një strukturë të vetëm për t'i kaluar lehtësisht në RiskEngine.
-    """
-    max_total_risk_pct: float = 6.0  # limiti total (p.sh. 6%)
-    risk_pct_grade_a: float = 3.0
-    risk_pct_grade_b: float = 2.0
+    """Conservative Category-2 defaults; policy values must be explicit."""
+    max_total_risk_pct: float = 1.0
+    risk_pct_grade_a: float = 1.0
+    risk_pct_grade_b: float = 0.5
     max_open_trades_grade_a: int = 2
     max_open_trades_grade_b: int = 3
     cooldown_minutes_after_loss: int = 30
     allow_multiple_trades_same_instrument: bool = False
-    allow_hedging_same_instrument: bool = False  # LONG dhe SHORT njëkohësisht
+    allow_hedging_same_instrument: bool = False
+    max_open_trades_total: int = 3
 
 
 @dataclass
 class InstrumentRiskState:
-    """Gjendja e riskut për një instrument të caktuar."""
     last_loss_at: Optional[datetime] = None
-    # më vonë mund të shtojmë statistika shtesë (winrate, rr, etj.)
 
 
 class RiskDecisionCode(str, Enum):
-    """Kodet e vendimeve të risk engine për debug dhe CSV."""
     ACCEPTED = "ACCEPTED"
+    REJECT_INVALID_INPUT = "REJECT_INVALID_INPUT"
     REJECT_GRADE = "REJECT_GRADE"
+    REJECT_GRADE_RISK = "REJECT_GRADE_RISK"
     REJECT_TOTAL_RISK = "REJECT_TOTAL_RISK"
     REJECT_TOO_MANY_A = "REJECT_TOO_MANY_A"
     REJECT_TOO_MANY_B = "REJECT_TOO_MANY_B"
+    REJECT_TOO_MANY_TOTAL = "REJECT_TOO_MANY_TOTAL"
     REJECT_INSTRUMENT_COOLDOWN = "REJECT_INSTRUMENT_COOLDOWN"
     REJECT_SAME_INSTRUMENT = "REJECT_SAME_INSTRUMENT"
     REJECT_HEDGING = "REJECT_HEDGING"
@@ -85,7 +88,6 @@ class RiskDecisionCode(str, Enum):
 
 @dataclass
 class RiskDecision:
-    """Rezultati i vlerësimit nga RiskEngine."""
     accept: bool
     code: RiskDecisionCode
     reason: str
@@ -99,161 +101,135 @@ class RiskDecision:
 
 
 class RiskEngine:
-    """Motor i menaxhimit të riskut dhe ekspozimit për V10.
-
-    Përgjegjësitë kryesore:
-    - Zbaton kufirin total të riskut (p.sh. max 6%).
-    - Zbaton rregullat e gradave (A/B/C/D).
-    - Zbaton numrin maksimal të tregtive A dhe B.
-    - Menaxhon cooldown pas humbjeve për çdo instrument.
-    - Parandalon mbifutjen në të njëjtin instrument ose hedging-un (nëse ndalohet).
-
-    KLASA NUK PREK OANDA DREJTPËRDREJT. Vetëm merr të dhëna nga
-    strategjia / state dhe kthen vendim nëse lejohet një tregti e re.
-    """
+    """Reject unsafe candidates; never communicate with the broker."""
 
     def __init__(self, config: Optional[RiskConfig] = None):
         self.config = config or RiskConfig()
-        # state risku per instrument; në praktikë mund të persistohen nga jashtë
+        cfg = self.config
+        cap = _positive_decimal(cfg.max_total_risk_pct, "max_total_risk_pct")
+        a = _positive_decimal(cfg.risk_pct_grade_a, "risk_pct_grade_a")
+        b = _positive_decimal(cfg.risk_pct_grade_b, "risk_pct_grade_b")
+        if cap > 100 or a > cap or b > a:
+            raise ValueError("Grade and total risk budgets are inconsistent")
+        for field in (
+            "max_open_trades_grade_a", "max_open_trades_grade_b",
+            "max_open_trades_total",
+        ):
+            item = getattr(cfg, field)
+            if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+                raise ValueError(f"{field}: invalid")
+        if (
+            not isinstance(cfg.cooldown_minutes_after_loss, int)
+            or isinstance(cfg.cooldown_minutes_after_loss, bool)
+            or cfg.cooldown_minutes_after_loss < 0
+        ):
+            raise ValueError("Invalid cooldown_minutes_after_loss")
         self._instrument_state: Dict[str, InstrumentRiskState] = {}
 
-    # -----------------------------
-    #  API publike
-    # -----------------------------
+    @staticmethod
+    def _reject(code: RiskDecisionCode, reason: str) -> RiskDecision:
+        return RiskDecision(accept=False, code=code, reason=reason)
 
     def evaluate_candidate(
-        self,
-        candidate: TradeCandidate,
-        open_positions: List[OpenPositionRisk],
+        self, candidate: TradeCandidate, open_positions: List[OpenPositionRisk]
     ) -> RiskDecision:
-        """Vlerëson nëse kandidati mund të hapet, bazuar në risk.
-
-        Nuk verifikon strukturën, EMA, ATR, etj. – vetëm risk & ekspozim.
-        """
+        """Pure decision over a complete, caller-verified reservation snapshot."""
         cfg = self.config
+        try:
+            if not isinstance(candidate.instrument, str) or not candidate.instrument:
+                raise ValueError("Missing instrument")
+            if candidate.direction not in ("LONG", "SHORT"):
+                raise ValueError("Invalid direction")
+            if candidate.grade not in (Grade.A, Grade.B, Grade.C, Grade.D):
+                raise ValueError("Invalid grade")
+            now = require_utc(candidate.timestamp)
+            score = Decimal(str(candidate.score))
+            if not score.is_finite() or not 0 <= score <= 100:
+                raise ValueError("Invalid signal score")
+            requested = _positive_decimal(candidate.requested_risk_pct, "requested risk")
+            if requested > 100:
+                raise ValueError("Requested risk exceeds 100%")
+            if not isinstance(open_positions, (list, tuple)):
+                raise ValueError("Exposure snapshot is not a collection")
+            positions = list(open_positions)
+            ids = set()
+            total = Decimal("0")
+            for pos in positions:
+                if (
+                    not isinstance(pos.trade_id, str) or not pos.trade_id
+                    or pos.trade_id in ids
+                    or not isinstance(pos.instrument, str) or not pos.instrument
+                    or pos.direction not in ("LONG", "SHORT")
+                    or pos.grade not in (Grade.A, Grade.B)
+                ):
+                    raise ValueError("Malformed or duplicate open/reserved exposure")
+                require_utc(pos.opened_at)
+                ids.add(pos.trade_id)
+                total += _positive_decimal(pos.risk_pct, "reserved risk")
+        except (ValueError, TypeError, AttributeError, InvalidOperation) as exc:
+            return self._reject(RiskDecisionCode.REJECT_INVALID_INPUT, str(exc))
 
-        # 1) Filtri i gradës – C dhe D nuk lejohen
         if candidate.grade not in (Grade.A, Grade.B):
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_GRADE,
-                reason=f"Grade {candidate.grade} nuk lejohet për hapje tregtie.",
-            )
-
-        # 2) Kontrollo cooldown për instrumentin
-        if self._is_in_cooldown(candidate.instrument, candidate.timestamp):
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_INSTRUMENT_COOLDOWN,
-                reason="Instrumenti është në cooldown pas një humbjeje.",
-            )
-
-        # 3) Kontrollo kufirin total të riskut
-        total_risk = sum(p.risk_pct for p in open_positions)
-        requested_risk = candidate.requested_risk_pct
-
-        if total_risk + requested_risk > cfg.max_total_risk_pct + 1e-9:
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_TOTAL_RISK,
-                reason=(
-                    f"Risk total ({total_risk:.2f}%) + i ri "
-                    f"({requested_risk:.2f}%) kalon kufirin "
-                    f"{cfg.max_total_risk_pct:.2f}%."
-                ),
-            )
-
-        # 4) Kontrollo numrin e tregtive A dhe B
-        num_a = sum(1 for p in open_positions if p.grade == Grade.A)
-        num_b = sum(1 for p in open_positions if p.grade == Grade.B)
-
-        if candidate.grade == Grade.A and num_a >= cfg.max_open_trades_grade_a:
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_TOO_MANY_A,
-                reason=(
-                    f"Ekzistojnë tashmë {num_a} tregti me Grade A, "
-                    f"limiti është {cfg.max_open_trades_grade_a}."
-                ),
-            )
-
-        if candidate.grade == Grade.B and num_b >= cfg.max_open_trades_grade_b:
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_TOO_MANY_B,
-                reason=(
-                    f"Ekzistojnë tashmë {num_b} tregti me Grade B, "
-                    f"limiti është {cfg.max_open_trades_grade_b}."
-                ),
-            )
-
-        # 5) Kontrollo nëse lejojmë më shumë se një tregti në të njëjtin instrument
-        same_instrument_positions = [
-            p for p in open_positions if p.instrument == candidate.instrument
-        ]
-
-        if not cfg.allow_multiple_trades_same_instrument and same_instrument_positions:
-            return RiskDecision(
-                accept=False,
-                code=RiskDecisionCode.REJECT_SAME_INSTRUMENT,
-                reason="Një tregti është tashmë e hapur në këtë instrument.",
-            )
-
-        # 6) Kontrollo hedging nëse nuk lejohet
-        if not cfg.allow_hedging_same_instrument and same_instrument_positions:
-            # nëse ekziston një tregti në drejtim të kundërt, refuzo
-            for p in same_instrument_positions:
-                if p.direction != candidate.direction:
-                    return RiskDecision(
-                        accept=False,
-                        code=RiskDecisionCode.REJECT_HEDGING,
-                        reason="Hedging në të njëjtin instrument nuk lejohet.",
-                    )
-
-        # Nëse kalon të gjitha filtrat – pranohet
-        return RiskDecision(
-            accept=True,
-            code=RiskDecisionCode.ACCEPTED,
-            reason="Kandidati kaloi të gjitha rregullat e riskut.",
+            return self._reject(RiskDecisionCode.REJECT_GRADE, "Only Grade A/B permitted")
+        grade_cap = (
+            _positive_decimal(cfg.risk_pct_grade_a, "A cap")
+            if candidate.grade == Grade.A
+            else _positive_decimal(cfg.risk_pct_grade_b, "B cap")
         )
+        if requested > grade_cap:
+            return self._reject(
+                RiskDecisionCode.REJECT_GRADE_RISK, "Requested risk exceeds grade cap"
+            )
+        if self._is_in_cooldown(candidate.instrument, now):
+            return self._reject(
+                RiskDecisionCode.REJECT_INSTRUMENT_COOLDOWN, "Loss cooldown active"
+            )
+        if total + requested > _positive_decimal(cfg.max_total_risk_pct, "risk cap"):
+            return self._reject(
+                RiskDecisionCode.REJECT_TOTAL_RISK, "Reserved exposure exceeds total cap"
+            )
+        if len(positions) >= cfg.max_open_trades_total:
+            return self._reject(
+                RiskDecisionCode.REJECT_TOO_MANY_TOTAL, "Maximum total reservations"
+            )
+        count_a = sum(pos.grade == Grade.A for pos in positions)
+        count_b = sum(pos.grade == Grade.B for pos in positions)
+        if candidate.grade == Grade.A and count_a >= cfg.max_open_trades_grade_a:
+            return self._reject(RiskDecisionCode.REJECT_TOO_MANY_A, "Maximum Grade A trades")
+        if candidate.grade == Grade.B and count_b >= cfg.max_open_trades_grade_b:
+            return self._reject(RiskDecisionCode.REJECT_TOO_MANY_B, "Maximum Grade B trades")
+        same = [pos for pos in positions if pos.instrument == candidate.instrument]
+        if not cfg.allow_hedging_same_instrument and any(
+            pos.direction != candidate.direction for pos in same
+        ):
+            return self._reject(RiskDecisionCode.REJECT_HEDGING, "Hedging forbidden")
+        if not cfg.allow_multiple_trades_same_instrument and same:
+            return self._reject(
+                RiskDecisionCode.REJECT_SAME_INSTRUMENT, "Duplicate instrument"
+            )
+        return RiskDecision(True, RiskDecisionCode.ACCEPTED, "Risk checks passed")
 
-    def register_loss(
-        self,
-        instrument: str,
-        when: Optional[datetime] = None,
-    ) -> None:
-        """Thirret kur një tregti për një instrument mbyllet në humbje.
-
-        Përdoret për të futur instrumentin në cooldown.
-        """
-        when = require_utc(when or utc_now())
-        state = self._instrument_state.get(instrument) or InstrumentRiskState()
-        state.last_loss_at = when
-        self._instrument_state[instrument] = state
+    def register_loss(self, instrument: str, when: Optional[datetime] = None) -> None:
+        at = require_utc(when or utc_now())
+        if not instrument:
+            raise ValueError("Missing instrument for cooldown")
+        self._instrument_state[instrument] = InstrumentRiskState(last_loss_at=at)
 
     def set_instrument_state(self, instrument: str, state: InstrumentRiskState) -> None:
-        """Lejon ngarkimin e state nga jashtë (p.sh. nga state_v10.json)."""
+        if not instrument or not isinstance(state, InstrumentRiskState):
+            raise ValueError("Invalid instrument cooldown state")
+        if state.last_loss_at is not None:
+            state.last_loss_at = require_utc(state.last_loss_at)
         self._instrument_state[instrument] = state
 
     def get_instrument_state(self, instrument: str) -> InstrumentRiskState:
-        """Kthen gjendjen e riskut për një instrument (krijon të re nëse mungon)."""
-        state = self._instrument_state.get(instrument)
-        if state is None:
-            state = InstrumentRiskState()
-            self._instrument_state[instrument] = state
-        return state
-
-    # -----------------------------
-    #  Funksione të brendshme
-    # -----------------------------
+        return self._instrument_state.setdefault(instrument, InstrumentRiskState())
 
     def _is_in_cooldown(self, instrument: str, now: datetime) -> bool:
-        cfg = self.config
-        require_utc(now)
+        now = require_utc(now)
         state = self._instrument_state.get(instrument)
-        if not state or not state.last_loss_at:
+        if state is None or state.last_loss_at is None:
             return False
-
-        return require_utc(now) < require_utc(state.last_loss_at) + timedelta(
-            minutes=cfg.cooldown_minutes_after_loss
+        return now < require_utc(state.last_loss_at) + timedelta(
+            minutes=self.config.cooldown_minutes_after_loss
         )

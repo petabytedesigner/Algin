@@ -1,4 +1,4 @@
-"""Category-1 read-only entrypoint; broker mutations are not implemented here.
+"""Category-2 read-only entrypoint; broker mutations are not implemented here.
 
 Strategy and risk output is advisory. No order submission, SL/TP changes or
 partial close can be requested until later categories are verified.
@@ -15,6 +15,7 @@ from data.data_handler import DataHandler
 from data.market_sessions import MarketSessions
 from execution.trade_executor import BrokerDataError, TradeExecutor
 from risk.risk_engine import Grade, RiskConfig, RiskEngine, TradeCandidate
+from risk.trade_plan import RiskPolicy, TradePlanner
 from strategy.strategy import Strategy
 from utils.time_tools import utc_now
 
@@ -27,7 +28,10 @@ INSTRUMENTS = ("EUR_USD", "GBP_USD", "USD_JPY", "USD_CAD", "AUD_USD",
 def build_risk_engine() -> RiskEngine:
     """Use the RiskEngine public contract without introducing sizing policies."""
     return RiskEngine(RiskConfig(
-        max_total_risk_pct=config.RISK_PER_TRADE,
+        max_total_risk_pct=config.MAX_TOTAL_RISK_PCT,
+        risk_pct_grade_a=config.RISK_GRADE_A_PCT,
+        risk_pct_grade_b=config.RISK_GRADE_B_PCT,
+        max_open_trades_total=config.MAX_ACTIVE_TRADES,
         max_open_trades_grade_a=config.MAX_TRADES_GRADE_A,
         max_open_trades_grade_b=config.MAX_TRADES_GRADE_B,
         cooldown_minutes_after_loss=30,
@@ -43,10 +47,50 @@ def evaluate_signal_risk(risk: RiskEngine, signal, now: datetime):
     candidate = TradeCandidate(
         instrument=signal.instrument, direction=signal.direction,
         grade=Grade(signal.grade), score=signal.score,
-        requested_risk_pct=config.RISK_PER_TRADE,
+        requested_risk_pct=(
+            config.RISK_GRADE_A_PCT if signal.grade == "A"
+            else config.RISK_GRADE_B_PCT
+        ),
         timestamp=now.astimezone(timezone.utc),
     )
     return risk.evaluate_candidate(candidate, [])
+
+
+
+def build_risk_policy() -> RiskPolicy:
+    """One authoritative Category-2 planning policy; no broker mutations."""
+    from decimal import Decimal
+
+    return RiskPolicy(
+        grade_a_pct=Decimal(str(config.RISK_GRADE_A_PCT)),
+        grade_b_pct=Decimal(str(config.RISK_GRADE_B_PCT)),
+        max_total_risk_pct=Decimal(str(config.MAX_TOTAL_RISK_PCT)),
+        max_instrument_risk_pct=Decimal(str(config.MAX_INSTRUMENT_RISK_PCT)),
+        max_currency_risk_pct=Decimal(str(config.MAX_CURRENCY_RISK_PCT)),
+        max_daily_loss_pct=Decimal(str(config.MAX_DAILY_LOSS_PCT)),
+        max_trades_grade_a=config.MAX_TRADES_GRADE_A,
+        max_trades_grade_b=config.MAX_TRADES_GRADE_B,
+        max_active_trades=config.MAX_ACTIVE_TRADES,
+        max_consecutive_losses=config.MAX_CONSECUTIVE_LOSSES,
+        max_drawdown_pct=Decimal(str(config.MAX_DRAWDOWN_PCT)),
+        reward_to_risk=Decimal(str(config.RISK_REWARD_RATIO)),
+        atr_stop_multiple=Decimal(str(config.ATR_STOP_MULTIPLE)),
+        minimum_stop_pips=Decimal(str(config.MIN_DISTANCE_PIPS)),
+        max_margin_fraction=Decimal(str(config.MAX_MARGIN_FRACTION)),
+        max_quote_age_seconds=config.MAX_QUOTE_AGE_SECONDS,
+    )
+
+
+def build_trade_plan(signal, atr, account, instrument, quote, exposure, losses, *, now, structure_level=None):
+    """P5: bridge a strategy signal to a fully validated preview-only plan.
+
+    The caller must supply reconciled exposure and verified loss-history inputs.
+    The category-1 observation loop does not fabricate these attestations.
+    """
+    return TradePlanner(build_risk_policy()).plan(
+        signal, atr, account, instrument, quote, exposure, losses,
+        now=now, structure_level=structure_level
+    )
 
 
 def scan_once() -> int:
@@ -67,7 +111,9 @@ def scan_once() -> int:
     if config.ENABLE_SESSIONS and not MarketSessions().can_trade(now):
         LOG.info("Outside configured session (read-only scan)")
         return 0
-    risk = build_risk_engine()
+    # A successful openTrades GET does not establish an EMPTY account:
+    # pending orders and outcome-unknown attempts require reconciliation.
+    # Signals here are observations, never an ACCEPTED risk decision.
     data = DataHandler()
     strategy = Strategy()
     for instrument in INSTRUMENTS:
@@ -93,15 +139,13 @@ def scan_once() -> int:
         if not signals:
             continue
         signal = max(signals, key=lambda s: s.score)
-        decision = evaluate_signal_risk(risk, signal, now)
-        LOG.info("%s %s grade=%s score=%.2f risk=%s OBSERVE_ONLY",
-                 instrument, signal.direction, signal.grade,
-                 signal.score, decision.code.value)
+        LOG.info("%s %s grade=%s score=%.2f risk=NOT_EVALUATED_UNRECONCILED OBSERVE_ONLY",
+                 instrument, signal.direction, signal.grade, signal.score)
     return 0
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Algin Category 1 read-only baseline")
+    parser = argparse.ArgumentParser(description="Algin Category 2 read-only baseline")
     parser.add_argument("--check", action="store_true", help="Verify imports without network")
     parser.add_argument("--once", action="store_true", help="One read-only scan")
     args = parser.parse_args(argv)
@@ -110,7 +154,7 @@ def main(argv=None) -> int:
         LOG.error("Category-1 build rejects any order-enabled configuration")
         return 3
     if args.check:
-        LOG.info("Category-1 imports OK; broker writes DISABLED")
+        LOG.info("Category-2 imports OK; broker writes DISABLED")
         return 0
     if args.once:
         return scan_once()
