@@ -74,9 +74,10 @@ def plan(*, atr="0.0010", **kwargs):
 
 
 def reserved(reservation_id, instrument, *, direction="LONG", grade="B",
-             risk="0.5", state="PENDING"):
+             risk="0.5", state="PENDING", margin="100"):
     return ExposureReservation(
-        reservation_id, instrument, direction, grade, D(risk), state
+        reservation_id, instrument, direction, grade, D(risk), state,
+        D(margin) if state != "OPEN" else None
     )
 
 
@@ -269,6 +270,60 @@ class TradePlanningTests(unittest.TestCase):
         self.assertEqual(main.main(["--check"]), 0)
         self.assertTrue(callable(main.build_trade_plan))
         self.assertEqual(main.build_risk_engine().config.max_total_risk_pct, 1.0)
+
+
+    def test_P16_unsettled_margin_is_reserved_as_well_as_risk(self):
+        item = reserved(
+            "pending-77", "GBP_USD", state="PENDING",
+            risk="0.5", margin="60"
+        )
+        trade = plan(
+            grade="B", reserved=(item,), pending_count=1, margin="100"
+        )
+        self.assertLessEqual(trade.estimated_margin_home, D("20"))
+        with self.assertRaises(PlanRejected):
+            plan(grade="B", reserved=(item,), pending_count=1, margin="50")
+
+    def test_P16_unknown_intents_require_a_margin_reservation(self):
+        with self.assertRaises(PlanRejected):
+            ExposureReservation(
+                "pending", "GBP_USD", "LONG", "B",
+                D("0.5"), "PENDING"
+            )
+        with self.assertRaises(PlanRejected):
+            ExposureReservation(
+                "unknown", "GBP_USD", "LONG", "B",
+                D("0.5"), "OUTCOME_UNKNOWN",
+                reserved_margin_home=D("NaN")
+            )
+        with self.assertRaises(PlanRejected):
+            ExposureReservation(
+                "unknown", "GBP_USD", "LONG", "B",
+                D("0.5"), "OUTCOME_UNKNOWN",
+                reserved_margin_home=D("-1")
+            )
+
+    def test_P10_decimal_inputs_normalized_before_planning(self):
+        cfg = RiskPolicy(
+            grade_a_pct="1.0", grade_b_pct="0.5",
+            max_total_risk_pct="1.0",
+            minimum_stop_pips="3", max_margin_fraction="0.5"
+        )
+        self.assertIsInstance(cfg.grade_a_pct, Decimal)
+        self.assertIsInstance(cfg.minimum_stop_pips, Decimal)
+        sig, acct, instrument, quote, book, losses = case()
+        from dataclasses import replace
+        acct = replace(acct, balance="10000", margin_available="8000")
+        quote = replace(quote, bid="1.1000", ask="1.1002")
+        instrument = replace(
+            instrument, minimum_trade_size="1",
+            maximum_order_units="1000000", margin_rate="0.02"
+        )
+        result = TradePlanner(cfg).plan(
+            sig, "0.0010", acct, instrument, quote, book, losses, now=NOW
+        )
+        self.assertGreater(result.units, 0)
+
 
 
 class RiskDataTests(unittest.TestCase):

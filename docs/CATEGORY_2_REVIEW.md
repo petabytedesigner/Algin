@@ -27,7 +27,7 @@ Parent `main` SHA: `523e04ba31b3bc51098cf2b573f34c805b54cee1`.
 | P13 | Signed LONG/SHORT stops and targets using broker quote and ATR, outward rounding | Fill slippage/gaps and guaranteed-stop restrictions are Category 3 |
 | P14 | Broker instrument pipLocation, displayPrecision, tradeUnitsPrecision, min/max limits | CFDs with unverified contract multiplier blocked |
 | P15 | Round unit size *down*, then recalculate monetary loss and required margin | Margin remains an estimate; broker final authority |
-| P16 | Verified reservation book combines OPEN/PENDING/OUTCOME_UNKNOWN | Live journal and atomic recovery are Category 4; none are assumed absent |
+| P16 | Verified reservation book combines OPEN/PENDING/OUTCOME_UNKNOWN, including reserved risk and unsettled margin | Live journal and atomic recovery are Category 4; none are assumed absent |
 | P17 | Total count, grade count, concentration, duplicate instrument and hedging blocked | Portfolio correlation beyond same symbol not inferred |
 | P18 | Loss-streak, drawdown, instrument cooldown entry locks | Existing-position *management* belongs to Category 4; entry lock never orders liquidation |
 
@@ -50,6 +50,8 @@ does not prove an atomic broker snapshot. This category refuses broker writes.
 Exposure and loss state must be **independently verified** and explicitly supplied
 by a future reconciliation component; tests use synthetic verified fixtures.
 No runtime path fabricates `verified=True` or assumes no ambiguous requests.
+Pending and outcome-unknown intentions must reserve both risk and **estimated
+margin** before another plan is accepted. Missing reservations block planning.
 
 After reviewing CI, only user approval allows merging this entire category.
 Do not describe a unit plan as an executable order or guaranteed worst-case loss.
