@@ -22,7 +22,12 @@ def safe_request(
     timeout: int = 10,
 ) -> Optional[requests.Response]:
 
-    for i in range(retries if method.upper() == 'GET' else 1):
+    # The old convenience adapter is restricted to broker reads.
+    # All account-changing requests must pass through journaled OandaClient.
+    if method.upper() != "GET":
+        log("Legacy HTTP adapter blocked an account-changing request.")
+        return None
+    for i in range(retries):
         try:
             if method.upper() == "GET":
                 r = requests.get(url, headers=headers, params=params, timeout=timeout)

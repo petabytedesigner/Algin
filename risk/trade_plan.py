@@ -127,7 +127,7 @@ def make_plan(*, instrument: str, direction: str, quote: dict, spec: dict,
     if not (0 < min_units <= unsigned <= max_units) or not (0 < margin_rate <= 1):
         raise BrokerError("Units violate instrument minimum/maximum or margin rate")
     # Position value (quote currency) converted to account currency; estimate only.
-    margin_estimate = unsigned * entry * value_factor * margin_rate
+    margin_estimate = unsigned * max(entry, bound) * value_factor * margin_rate
     if margin_estimate > margin * Decimal("0.90"):
         raise BrokerError("Conservative margin reserve exceeded")
     risk_real = unsigned * risk_per_unit_home

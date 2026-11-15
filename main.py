@@ -57,7 +57,7 @@ def main(argv=None) -> int:
                 LOG.error("Cycle blocked: %s", exc.__class__.__name__)
                 events.emit("CYCLE_BLOCKED", reason=exc.__class__.__name__, status="BLOCKED")
                 heartbeat("BLOCKED", exc.__class__.__name__)
-                if isinstance(exc, StateError):
+                if isinstance(exc, StateError) or args.once:
                     return 3
             if args.once:
                 return 0

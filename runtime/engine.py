@@ -68,6 +68,10 @@ class TradingEngine:
 
     def _adopt_intent(self, intent_id, intent, observed):
         tid = str(observed["id"])
+        if ((observed.get("clientExtensions") or {}).get("id") != intent_id or
+                observed.get("instrument") != intent.get("instrument") or
+                number(observed.get("initialUnits")) != number(intent.get("units"))):
+            raise BrokerError("Recovered trade does not match journaled intent")
         self.state["trades"][tid] = {
             "status": "OPEN", "instrument": intent["instrument"],
             "direction": intent["direction"], "grade": intent["grade"],
@@ -80,7 +84,17 @@ class TradingEngine:
             "partial_done": False, "opened_at": observed.get("openTime", ""),
         }
         intent["trade_id"] = tid
-        intent["status"] = "CONFIRMED" if observed.get("stopLossOrder") and observed.get("takeProfitOrder") else "UNPROTECTED_OR_UNVERIFIED"
+        observed_stop = (observed.get("stopLossOrder") or {}).get("price")
+        observed_tp = (observed.get("takeProfitOrder") or {}).get("price")
+        filled_entry = number(observed.get("price"))
+        bound = number(intent.get("price_bound"))
+        side_ok = (filled_entry <= bound if intent["direction"] == "LONG" else filled_entry >= bound)
+        protected = (
+            observed_stop is not None and observed_tp is not None and
+            number(observed_stop) == number(intent["stop_loss"]) and
+            number(observed_tp) == number(intent["take_profit"]) and side_ok)
+        intent["status"] = "CONFIRMED" if protected else "UNPROTECTED_OR_UNVERIFIED"
+        self.state["trades"][tid]["protection"] = "CONFIRMED" if protected else "MISSING"
         self.store.save(self.state)
 
     def _reconcile(self, broker_trades):
@@ -207,7 +221,14 @@ class TradingEngine:
 
     def _setup(self, inst, candles, now):
         # Historical structure precedes the breakout candle; retest candle is last.
-        history, breakout, retest = candles[-22:-2], candles[-2], candles[-1]
+        recent = candles[-22:]
+        if len(recent) < 22:
+            return None
+        if any((timestamp(recent[i]["time"]) - timestamp(recent[i-1]["time"])).total_seconds() != 900
+               for i in range(1, len(recent))):
+            # Rebuild zones only from continuous M15 history, not weekend gaps.
+            return None
+        history, breakout, retest = recent[:-2], recent[-2], recent[-1]
         if len(history) < 20:
             return None
         resistance = max(c["high"] for c in history)

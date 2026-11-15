@@ -42,6 +42,7 @@ class TradeExecutor:
                      direction=plan.direction, signal_id=signal_id, grade=grade,
                      units=str(plan.units), entry_hint=str(plan.entry_hint),
                      stop_loss=str(plan.stop_loss), take_profit=str(plan.take_profit),
+                     price_bound=str(plan.price_bound),
                      risk_pct=str(plan.risk_pct), risk_home=str(plan.risk_home))
         payload = plan.order(intent_id)
         try:

@@ -74,6 +74,15 @@ def plan_for(direction="LONG", **kwargs):
                      max_spread_pips="2.5", slippage_pips="1")
 
 
+class LegacyBoundaryTests(unittest.TestCase):
+    def test_old_http_helper_cannot_send_order(self):
+        from unittest.mock import patch
+        from utils.common import safe_request
+        with patch("requests.post") as post:
+            self.assertIsNone(safe_request("POST", "https://example.invalid"))
+            post.assert_not_called()
+
+
 class BrokerTests(unittest.TestCase):
     def test_trade_id_from_trade_open_only(self):
         result = trade_fill({"orderFillTransaction": {
