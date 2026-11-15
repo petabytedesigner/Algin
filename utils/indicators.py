@@ -5,10 +5,10 @@ from typing import List, Dict, Any, Optional
 #  Indicator Engine V10
 #
 #  Llogarit EMA, SMA, ATR, Wick %, Body %, Candle Size etj.
-#  Këto përdoren nga strategy_v10, trend_engine, atr_engine, candle_rules.
+#  Këto përdoren nga strategy, trend_engine, atr_engine, candle_rules.
 # ----------------------------------------------------------
 
-class IndicatorsV10:
+class Indicators:
 
     # -----------------------------
     #  EMA
