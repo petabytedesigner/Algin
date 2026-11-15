@@ -53,8 +53,9 @@ def net_result(*,gross_pl, costs:FillCosts, gross_includes=()):
     """
     if not isinstance(costs,FillCosts): raise BacktestError("Costs required")
     allowed={"spread","slippage","commission","financing"}
-    included=set(gross_includes)
-    if len(included)!=len(tuple(gross_includes)) or not included<=allowed:
+    items=tuple(gross_includes)
+    included=set(items)
+    if len(included)!=len(items) or not included<=allowed:
         raise BacktestError("Unknown/duplicate cost inclusion")
     gross=dec(gross_pl,"gross_pl")
     costs.total()

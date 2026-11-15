@@ -250,17 +250,27 @@ def manage_once() -> int:
     if not config.API_KEY or not config.ACCOUNT_ID:
         LOG.error("OANDA Practice credentials required for lifecycle recovery")
         return 2
+    cycle = uuid4().hex
+    heartbeat = Heartbeat(config.HEARTBEAT_PATH)
     try:
+        heartbeat.write("ACTIVE",cycle_id=cycle)
         report = ManagementLoop(AccountReconciler(config.ACCOUNT_ID)).run_once()
-    except (ReconcileError, StateError, JournalError, ValueError) as exc:
+        if report.blocked_reasons:
+            LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
+            heartbeat.write("BLOCKED",reason_code="RECONCILIATION_BLOCKED",
+                            cycle_id=cycle)
+            return 3
+        LOG.info("Account cursor=%s managed_trades=%d no_broker_writes",
+                 report.cursor, len(report.owned_open_trades))
+        heartbeat.write("CYCLE_COMPLETE",cycle_id=cycle)
+        return 0
+    except (ReconcileError, StateError, JournalError, HeartbeatError, ValueError) as exc:
         LOG.error("Lifecycle reconciliation blocked: %s", exc)
+        try:
+            heartbeat.write("BLOCKED",reason_code="RECOVERY_ERROR",cycle_id=cycle)
+        except HeartbeatError:
+            pass
         return 3
-    if report.blocked_reasons:
-        LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
-        return 3
-    LOG.info("Account cursor=%s managed_trades=%d no_broker_writes",
-             report.cursor, len(report.owned_open_trades))
-    return 0
 
 
 def main(argv=None) -> int:
