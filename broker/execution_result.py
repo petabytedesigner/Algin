@@ -41,11 +41,18 @@ def _id(value):
     return None
 
 
+def _broker_id(value):
+    # OANDA REST transaction, trade and order IDs are numeric strings.
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and 1 <= len(value) <= 50:
+        return value
+    return None
+
+
 def _open_info(fill: dict) -> Optional[str]:
     data = fill.get("tradeOpened")
     if data is None:
         return None
-    if not isinstance(data, dict) or not _id(data.get("tradeID")):
+    if not isinstance(data, dict) or not _broker_id(data.get("tradeID")):
         raise ValueError("Malformed tradeOpened; no tradeID certainty")
     number(data["units"], "opened units", zero_ok=False)
     return data["tradeID"]
@@ -70,7 +77,7 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
         if not isinstance(tx_fill, dict):
             return unknown("Malformed orderFillTransaction")
         try:
-            if tx_fill.get("type") != "ORDER_FILL" or not _id(tx_fill.get("id")):
+            if tx_fill.get("type") != "ORDER_FILL" or not _broker_id(tx_fill.get("id")):
                 return unknown("Missing/invalid fill transaction ID or type")
             price = number(tx_fill["price"], "fill price", positive=True)
             units = number(tx_fill["units"], "filled units", zero_ok=False)
@@ -78,11 +85,11 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
             reduced = tx_fill.get("tradeReduced")
             closed = tx_fill.get("tradesClosed", [])
             if reduced is not None:
-                if not isinstance(reduced, dict) or not _id(reduced.get("tradeID")):
+                if not isinstance(reduced, dict) or not _broker_id(reduced.get("tradeID")):
                     return unknown("Malformed tradeReduced")
                 number(reduced["units"], "reduced units", zero_ok=False)
             if not isinstance(closed, list) or not all(
-                isinstance(t, dict) and _id(t.get("tradeID")) for t in closed
+                isinstance(t, dict) and _broker_id(t.get("tradeID")) for t in closed
             ):
                 return unknown("Malformed tradesClosed")
             for t in closed:
@@ -94,7 +101,7 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
                 return unknown("Invalid orderCreateTransaction")
             create_id = create.get("id") if create else None
             order_id = tx_fill.get("orderID") or create_id
-            if not _id(order_id) or (create_id and create_id != order_id):
+            if not _broker_id(order_id) or (create_id and create_id != order_id):
                 return unknown("Unreliable order identity")
             return ExecutionResult(
                 Outcome.FILLED, attempt_id, request_id, order_id, trade_id,
@@ -107,16 +114,16 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
     if status in (200, 201) and tx_cancel is not None:
         if (not isinstance(tx_cancel, dict)
             or tx_cancel.get("type") != "ORDER_CANCEL"
-            or not _id(tx_cancel.get("id"))):
+            or not _broker_id(tx_cancel.get("id"))):
             return unknown("Invalid cancel transaction")
         order_id = tx_cancel.get("orderID")
         return ExecutionResult(
             Outcome.CANCELLED, attempt_id, request_id,
-            order_id=_id(order_id), reason="Order cancellation transaction verified"
+            order_id=_broker_id(order_id), reason="Order cancellation transaction verified"
         )
     if status in (400, 404) and tx_reject is not None:
         if (not isinstance(tx_reject, dict)
-            or not _id(tx_reject.get("id"))
+            or not _broker_id(tx_reject.get("id"))
             or tx_reject.get("type") not in (
                 "MARKET_ORDER_REJECT", "ORDER_REJECT"
             )):

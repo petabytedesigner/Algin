@@ -72,6 +72,11 @@ class OrderEngine:
                 raise ValueError("Missing/inconsistent broker account inventory")
         except (KeyError, ValueError, TypeError) as exc:
             raise PreflightRejected("Account snapshot incomplete") from exc
+        # OANDA explicitly prohibits clientExtensions on MT4-associated
+        # accounts. This field is a deny signal when available; Category 4
+        # must additionally verify account properties before real activation.
+        if raw.get("mt4AccountID") is not None:
+            raise PreflightRejected("MT4-associated account: client IDs unavailable")
         # SafetyCheck is the common authority for SL/TP and ownership issues.
         known = self.journal.snapshot()
         issues = SafetyCheck.audit_raw_trades(trades, known)
@@ -97,8 +102,12 @@ class OrderEngine:
         """
         _identity(signal_id, "signal ID")
         now = require_utc(now)
-        if isinstance(self.transport, PracticeTransport) and not config.ORDER_WRITES_ENABLED:
-            raise BrokerWriteDisabled("Category 3 is not authorized for Practice order writes")
+        if isinstance(self.transport, PracticeTransport):
+            from broker.practice_transport import _PRACTICE_WRITES_RELEASED
+            if not _PRACTICE_WRITES_RELEASED or config.ORDER_WRITES_ENABLED is not True:
+                raise BrokerWriteDisabled(
+                    "Category 3 is not authorized for Practice order writes"
+                )
         if not isinstance(plan, TradePlan) or not isinstance(rules, InstrumentRules):
             raise PreflightRejected("Typed risk plan/instrument rules required")
         if not isinstance(conversion, QuoteConversions):

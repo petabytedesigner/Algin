@@ -64,7 +64,10 @@ def get_pricing(instrument: str) -> Optional[Dict[str, float]]:
         matches = [
             price for price in prices
             if isinstance(price, dict) and price.get("instrument") == instrument
-            and price.get("tradeable") is True
+            and (
+                (price.get("status") == "tradeable" and price.get("tradeable", True) is not False)
+                if "status" in price else price.get("tradeable") is True
+            )
         ]
         if len(matches) != 1:
             return None

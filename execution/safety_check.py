@@ -55,6 +55,22 @@ class SafetyCheck:
                 issues.append("Unverified/missing TP")
             if owned and not saved.get("protection_verified"):
                 issues.append("Algin trade protection not confirmed")
+            if owned:
+                # A protected flag without persisted expected prices is never
+                # enough evidence that the broker's current SL/TP is correct.
+                from decimal import Decimal, InvalidOperation
+                try:
+                    expected = saved["request"]["order"]
+                    stop = Decimal(str(trade["stopLossOrder"]["price"]))
+                    target = Decimal(str(trade["takeProfitOrder"]["price"]))
+                    requested_stop = Decimal(str(expected["stopLossOnFill"]["price"]))
+                    requested_target = Decimal(str(expected["takeProfitOnFill"]["price"]))
+                    if not all(x.is_finite() and x > 0 for x in (
+                        stop, target, requested_stop, requested_target
+                    )) or stop != requested_stop or target != requested_target:
+                        issues.append("Broker protection differs from saved intent")
+                except (KeyError, TypeError, ValueError, InvalidOperation):
+                    issues.append("No trustworthy requested/broker protection prices")
             if issues:
                 report[trade_id] = {"instrument": trade.get("instrument"),
                                     "issues": issues, "owned": owned}

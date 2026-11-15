@@ -15,6 +15,9 @@ import config
 
 
 PRACTICE_API = "https://api-fxpractice.oanda.com/v3"
+# Category-3 build must NEVER submit real orders, even if config is edited.
+# A future reviewed category must explicitly replace this release gate.
+_PRACTICE_WRITES_RELEASED = False
 
 
 class BrokerCommunicationError(RuntimeError):
@@ -80,6 +83,6 @@ class PracticeTransport:
     def submit_market_order(self, payload: dict) -> BrokerReply:
         # Deliberately not environment-configurable. Category-4 activation
         # requires an explicit code review & change to this constant.
-        if config.ORDER_WRITES_ENABLED is not True:
+        if not _PRACTICE_WRITES_RELEASED or config.ORDER_WRITES_ENABLED is not True:
             raise BrokerWriteDisabled("Category-3 broker writes are disabled")
         return self._call("POST", "/orders", payload=payload)

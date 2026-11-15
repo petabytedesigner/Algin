@@ -317,6 +317,16 @@ class ClassifierTests(unittest.TestCase):
                 outcome = classify_response(BrokerReply(status, body), "attempt")
                 self.assertEqual(outcome.outcome, Outcome.UNKNOWN)
 
+
+    def test_P22_malformed_trade_identifier_not_used_as_url(self):
+        fake = FakeTransport()
+        fake.payload = {"order": {"units": "10"}}
+        body = fake.fill().body
+        body["orderFillTransaction"]["tradeOpened"]["tradeID"] = "../orders"
+        result = classify_response(BrokerReply(201, body), "attempt")
+        self.assertEqual(result.outcome, Outcome.UNKNOWN)
+        self.assertIsNone(result.trade_id)
+
     def test_P28_real_fill_records_reductions_and_closures(self):
         fake = FakeTransport()
         fake.payload = {"order": {"units": "-100"}}
@@ -505,14 +515,14 @@ class OrderEngineTests(unittest.TestCase):
                       "id": "301", "type": "ORDER_FILL",
                       "orderID": "300", "units": "1",
                       "price": "1.1002",
-                      "tradeReduced": {"tradeID": "old", "units": "1"}
+                      "tradeReduced": {"tradeID": "201", "units": "1"}
                   }}
         )
         out = self.submit()
         self.assertEqual(out.outcome, Outcome.FILLED)
         self.assertFalse(out.protection_verified)
         self.assertEqual(self.journal.get(out.attempt_id)["trade_reduced"]["tradeID"],
-                         "old")
+                         "201")
         self.assertEqual(self.transport.posts, 1)
 
     def test_P30_manual_trade_preflight_block(self):
@@ -529,6 +539,26 @@ class OrderEngineTests(unittest.TestCase):
         self.transport.account["account"]["orders"] = [{
             "id": "pend-1", "instrument": "EUR_USD"
         }]
+        with self.assertRaises(PreflightRejected):
+            self.submit()
+        self.assertEqual(self.transport.posts, 0)
+
+
+    def test_P30_mt4_account_prohibited_from_client_id_order(self):
+        self.transport.account["account"]["mt4AccountID"] = 123456
+        with self.assertRaises(PreflightRejected):
+            self.submit()
+        self.assertEqual(self.transport.posts, 0)
+
+    def test_P24_new_quote_stale_spread_prevents_intent_and_POST(self):
+        self.transport.quote = price_fixture(ask="1.10039")
+        with self.assertRaises(PreflightRejected):
+            self.submit()
+        self.assertEqual(self.transport.posts, 0)
+        self.assertFalse(self.journal.path.exists())
+
+    def test_P21_order_preflight_requires_account_snapshot(self):
+        self.transport.account["account"]["openTradeCount"] = 1
         with self.assertRaises(PreflightRejected):
             self.submit()
         self.assertEqual(self.transport.posts, 0)
@@ -550,7 +580,11 @@ class OwnershipTests(unittest.TestCase):
     def test_P30_manual_and_spoofed_algin_trade_not_owned(self):
         entries = [{
             "attempt_id": "algin-aa", "trade_id": "100",
-            "status": "FILLED", "protection_verified": True
+            "status": "FILLED", "protection_verified": True,
+            "request": {"order": {
+                "stopLossOnFill": {"price": "1.0"},
+                "takeProfitOnFill": {"price": "1.2"}
+            }}
         }]
         raw = [
             {"id": "100", "instrument": "EUR_USD",
@@ -570,6 +604,26 @@ class OwnershipTests(unittest.TestCase):
         self.assertFalse(result["101"]["owned"])
         self.assertIn("102", result)
         self.assertIn("Manual/foreign/unattributed trade", result["102"]["issues"])
+
+    def test_P29_existing_owned_trade_with_modified_stop_is_unsafe(self):
+        saved = [{
+            "attempt_id": "algin-aa", "trade_id": "100",
+            "status": "FILLED", "protection_verified": True,
+            "request": {"order": {
+                "stopLossOnFill": {"price": "1.0"},
+                "takeProfitOnFill": {"price": "1.2"}
+            }}
+        }]
+        raw = [{
+            "id": "100", "instrument": "EUR_USD",
+            "clientExtensions": {"id": "algin-aa", "tag": "algin"},
+            "stopLossOrder": {"price": "1.01"},
+            "takeProfitOrder": {"price": "1.2"}
+        }]
+        report = SafetyCheck.audit_raw_trades(raw, saved)
+        self.assertIn("100", report)
+        self.assertIn("Broker protection differs from saved intent",
+                      report["100"]["issues"])
 
 
 class PracticeSafetyTests(unittest.TestCase):
@@ -591,6 +645,95 @@ class PracticeSafetyTests(unittest.TestCase):
                 with self.assertRaises(BrokerWriteDisabled):
                     service.submit(plan, rules, conv, signal_id="sig", now=NOW)
                 self.assertFalse(ledger.path.exists())
+
+
+    def test_P19_config_toggle_alone_does_not_release_real_POST(self):
+        from unittest.mock import Mock
+        session = Mock()
+        transport = PracticeTransport(session=session)
+        with patch.object(config, "ORDER_WRITES_ENABLED", True):
+            with self.assertRaises(BrokerWriteDisabled):
+                transport.submit_market_order({"order": {"units": "10"}})
+        session.request.assert_not_called()
+
+    def test_P19_config_toggle_cannot_even_create_real_intent(self):
+        with TemporaryDirectory() as temp:
+            ledger = IntentJournal("acct-1", directory=temp)
+            service = OrderEngine("acct-1", journal=ledger)
+            plan, rules, conv = inputs()
+            with patch.object(config, "ORDER_WRITES_ENABLED", True):
+                with self.assertRaises(BrokerWriteDisabled):
+                    service.submit(
+                        plan, rules, conv, signal_id="sig", now=NOW
+                    )
+            self.assertFalse(ledger.path.exists())
+
+
+
+    def test_P24_official_status_supported_by_all_quote_readers(self):
+        from execution.trade_executor import TradeExecutor
+        from utils.common import get_pricing
+        from broker.risk_data import get_quote_conversions
+
+        raw = price_fixture()
+        class Dummy:
+            status_code = 200
+
+            def __init__(self, body):
+                self.body = body
+
+            def json(self):
+                return self.body
+
+        with patch("execution.trade_executor.safe_request",
+                   return_value=Dummy(raw)):
+            price = TradeExecutor().get_price("EUR_USD")
+            self.assertEqual(price["bid"], 1.1)
+        with patch("utils.common.safe_request", return_value=Dummy(raw)):
+            price = get_pricing("EUR_USD")
+            self.assertEqual(price["ask"], 1.1002)
+        conversion_raw = dict(raw)
+        conversion_raw["homeConversions"] = [
+            {"currency": "EUR", "positionValue": "1.1001"}
+        ]
+        with (
+            patch.object(config, "API_KEY", "dummy"),
+            patch.object(config, "ACCOUNT_ID", "acct-1"),
+            patch("broker.risk_data.safe_request",
+                  return_value=Dummy(conversion_raw))
+        ):
+            conversion = get_quote_conversions("EUR_USD", "USD")
+        self.assertEqual(conversion.quote_loss_to_home, D("1"))
+        self.assertEqual(conversion.base_value_to_home, D("1.1001"))
+
+    def test_P20_response_with_different_open_trade_and_order_ids(self):
+        fake = FakeTransport()
+        fake.payload = {"order": {"units": "100"}}
+        response = fake.fill()
+        self.assertEqual(
+            classify_response(response, "trial").trade_id, "2201"
+        )
+        self.assertNotEqual(
+            classify_response(response, "trial").trade_id,
+            classify_response(response, "trial").order_id
+        )
+
+    def test_P21_read_only_reconciliation_pending_is_unknown(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        transport = FakeTransport()
+        journal = IntentJournal("acct-1", directory=temp.name)
+        service = OrderEngine("acct-1", transport=transport, journal=journal)
+        plan, rules, conv = inputs()
+        transport.submit_failure = BrokerCommunicationError("lost")
+        first = service.submit(plan, rules, conv, signal_id="s99", now=NOW)
+        self.assertEqual(first.outcome, Outcome.UNKNOWN)
+        transport.provision_reconciliation("PENDING")
+        result = service.reconcile(first.attempt_id)
+        self.assertEqual(result.outcome, Outcome.UNKNOWN)
+        self.assertEqual(transport.posts, 1)
+        self.assertEqual(journal.get(first.attempt_id)["status"], "UNKNOWN")
+
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ Scope: P19, P20, P21, P22, P23, P24, P26, P27, P28, P29, P30.
 
 **THIS IS NOT A LIVE TRADING BOT.** The complete broker boundary is tested
 with an injectable simulated transport. Actual OANDA Practice submissions
-remain hard-disabled until Category 4 reconciliation and explicit review.
+remain hard-disabled by an independent compile-time release gate plus the
+configuration gate, until Category 4 reconciliation and explicit review.
 The main.py observation loop does not call OrderEngine.
 
 ## Category matrix
@@ -49,6 +50,8 @@ previous POST did not execute. The attempt remains UNKNOWN and is never resent.
   quantization never increases size and enforces the original monetary risk cap.
 - The 2.5-pip spread preflight is based on historical FX-major LogTX read-only
   checks and is conservative; other instruments require explicit verified limits.
+- Broker account snapshots with a populated mt4AccountID are denied.
+  A separate full account-properties check is still required before release.
 - Client extensions may not be used on MT4-linked accounts. Such accounts
   must remain blocked without an alternate reviewed ownership scheme.
 - Journal locks deliberately survive crashes; manual reconciliation is

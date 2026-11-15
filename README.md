@@ -56,3 +56,13 @@ reconciliation, open-position management and authenticated loss statistics.
 Category 5 addresses strategy/data quality; Category 6 event reporting,
 regression and performance analysis. Real OANDA Practice integration and
 Termux behavior remain untested.
+
+## Category 3 development — no broker writes
+
+The third category adds an isolated broker execution boundary with durable
+intent journaling, direction-aware priceBound, strict OANDA v20 result decoding,
+GET-only reconciliation after uncertain outcomes, and postfill SL/TP/ownership
+verification. Both independent release and configuration gates block actual
+broker POST requests. The active main.py remains observation-only.
+Read docs/CATEGORY_3_REVIEW.md. Offline fixtures do not establish real Practice
+execution, restart reconciliation for an operational account, or trade safety.
