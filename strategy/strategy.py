@@ -19,7 +19,7 @@ class StrategySignal:
     """Rezultati i strategjisë për një sinjal të vetëm.
 
     Ky objekt NUK hap tregti vetë; përdoret nga layer-i më lart
-    (p.sh. main_v10) për të ndërtuar TradeCandidate dhe për t'ia
+    (p.sh. main) për të ndërtuar TradeCandidate dhe për t'ia
     kaluar RiskEngine-it.
     """
     instrument: str
@@ -31,7 +31,7 @@ class StrategySignal:
     timestamp: datetime
 
 
-class StrategyV10:
+class Strategy:
     """Bërthama e logjikës së sinjalit për robotin V10.
 
     Kombinon:

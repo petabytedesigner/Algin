@@ -8,7 +8,7 @@ from typing import Dict
 #  Super e rëndësishme për SL/TP dhe risk-engine.
 # ------------------------------------------------------
 
-class PipConverterV10:
+class PipConverter:
 
     def pip_value(self, instrument: str) -> float:
         """Madhësia e një pip-i sipas llojit të instrumentit."""

@@ -1,8 +1,8 @@
 
 from __future__ import annotations
 from typing import Optional, Dict, Any
-from utils.utils_v10 import log, safe_request
-import config_v10 as config
+from utils.common import log, safe_request
+import config as config
 import datetime as dt
 import os, csv
 
@@ -64,8 +64,8 @@ class SafetyCheck:
     def check_all(self) -> Dict[str, Dict[str, Any]]:
         """Kthen një raport për çdo trade të hapur dhe logon rezultatet në CSV (vetëm kur ka probleme)."""
         data = self._get_open_trades()
-        if not data:
-            return {}
+        if not isinstance(data, dict) or not isinstance(data.get("trades"), list):
+            return {"__broker_error__": {"issues": ["Broker openTrades unavailable or malformed"]}}
 
         trades = data.get("trades", [])
         report: Dict[str, Dict[str, Any]] = {}

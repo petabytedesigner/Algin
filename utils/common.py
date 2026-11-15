@@ -1,6 +1,7 @@
 from __future__ import annotations
 import requests, time, json, datetime as dt
 from typing import Optional, Dict, Any
+from utils.time_tools import iso_utc, utc_now
 
 # ---------------------------------------------
 # Logging minimal, i pastër dhe i sigurt
@@ -22,6 +23,8 @@ def safe_request(
     timeout: int = 10,
 ) -> Optional[requests.Response]:
 
+    if method.upper() != "GET":
+        raise RuntimeError("Category-1 blocks broker mutations; no POST/PUT retries")
     for i in range(retries):
         try:
             if method.upper() == "GET":
@@ -44,7 +47,7 @@ def safe_request(
 # ---------------------------------------------
 # Pricing i pastër (bid/ask/mid)
 # ---------------------------------------------
-import config_v10 as config
+import config as config
 
 def get_pricing(instrument: str) -> Optional[Dict[str,float]]:
     url = f"{config.OANDA_URL}/accounts/{config.ACCOUNT_ID}/pricing"
@@ -74,7 +77,7 @@ def sleep_minutes(m: int) -> None:
 # Timestamps të pastër
 # ---------------------------------------------
 def now_utc_iso() -> str:
-    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return iso_utc(utc_now())
 
 # ---------------------------------------------
 # Llogaritja e madhësisë së një pip-i për çdo instrument

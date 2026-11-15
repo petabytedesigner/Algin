@@ -1,10 +1,10 @@
 from __future__ import annotations
-import config_v10 as config
-from utils.utils_v10 import log
+import config as config
+from utils.common import log
 from typing import Optional, List, Dict, Any
 import datetime as _dt
 
-class NewsFilterV10:
+class NewsFilter:
     """Filtri i lajmeve për robotin V10.
 
     Që bën:
@@ -25,8 +25,8 @@ class NewsFilterV10:
     def load_news(self) -> List[Dict[str, Any]]:
         """Ngarkon lajmet nga burimi i konfiguruar.
 
-        Pret që config_v10 të ketë NEWS_PROVIDER_URL ose listë të ngurtë.
-        Përdoret nga main_v10 çdo X minuta.
+        Pret që config të ketë NEWS_PROVIDER_URL ose listë të ngurtë.
+        Përdoret nga main çdo X minuta.
 
         Format i pritur:
         [
@@ -90,7 +90,7 @@ class NewsFilterV10:
         return before <= now <= after
 
     # ---------------------------------------------------------
-    #  Funksioni final për main_v10
+    #  Funksioni final për main
     # ---------------------------------------------------------
     def block_trading(self,instrument:str, now:_dt.datetime) -> Optional[str]:
         """Kthen arsye nëse ky instrument duhet bllokuar nga tregtia.

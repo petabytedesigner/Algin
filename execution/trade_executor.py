@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
-import config_v10 as config
-from utils.utils_v10 import log, safe_request, get_pricing, pip_size
+import config as config
+from utils.common import log, safe_request, get_pricing, pip_size
+import math
 
 import datetime as dt
 import os, csv
@@ -44,7 +45,11 @@ class OrderRequest:
     comment: Optional[str] = None     # për debug / audit
 
 
-class TradeExecutorV10:
+class BrokerDataError(RuntimeError):
+    """Missing or inconsistent broker read; refuse to assume there are no trades."""
+
+
+class TradeExecutor:
     """Ekzekutuesi i tregtive për V10 (shtresa OANDA).
 
     Ky modul:
@@ -68,6 +73,69 @@ class TradeExecutorV10:
     #  HAPI KRYESOR: HAP TREGTI ME SL & TP
     # ---------------------------------------------------------
 
+
+    def get_open_trades(self):
+        """Normalized read-only OANDA trade snapshot. A failed GET is not an empty list."""
+        url = f"{self.base_url}/accounts/{self.account_id}/openTrades"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        response = safe_request("GET", url, headers=headers)
+        if response is None or response.status_code != 200:
+            raise BrokerDataError("Broker openTrades read unavailable")
+        try:
+            trades = response.json()["trades"]
+            if not isinstance(trades, list):
+                raise ValueError("Missing trade list")
+            result = []
+            seen = set()
+            for item in trades:
+                if not isinstance(item, dict):
+                    raise ValueError("Malformed trade")
+                trade_id = str(item["id"])
+                instrument = item["instrument"]
+                units, entry = float(item["currentUnits"]), float(item["price"])
+                if (not trade_id or trade_id in seen or
+                        not isinstance(instrument, str) or not instrument or
+                        not math.isfinite(units) or units == 0 or
+                        not math.isfinite(entry) or entry <= 0):
+                    raise ValueError("Invalid trade identity/size/price")
+                seen.add(trade_id)
+                sl_info = item.get("stopLossOrder")
+                tp_info = item.get("takeProfitOrder")
+                sl = float(sl_info["price"]) if isinstance(sl_info, dict) else None
+                tp = float(tp_info["price"]) if isinstance(tp_info, dict) else None
+                if (sl is not None and not (math.isfinite(sl) and sl > 0)) or (
+                        tp is not None and not (math.isfinite(tp) and tp > 0)):
+                    raise ValueError("Malformed protection")
+                result.append({
+                    "id": trade_id, "instrument": instrument,
+                    "units": units, "direction": "LONG" if units > 0 else "SHORT",
+                    "price": entry, "sl": sl, "tp": tp,
+                })
+            return result
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise BrokerDataError("Malformed broker openTrades snapshot") from exc
+
+    def get_price(self, instrument):
+        """Account pricing: explicitly tradeable bid/ask; full freshness rules are Cat 3."""
+        url = f"{self.base_url}/accounts/{self.account_id}/pricing"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        response = safe_request("GET", url, headers=headers,
+                                params={"instruments": instrument})
+        if response is None or response.status_code != 200:
+            raise BrokerDataError("Broker pricing read unavailable")
+        try:
+            prices = response.json()["prices"]
+            matches = [p for p in prices if p["instrument"] == instrument]
+            if len(matches) != 1 or matches[0].get("tradeable") is not True:
+                raise ValueError("Missing or untradeable quote")
+            bid = float(matches[0]["bids"][0]["price"])
+            ask = float(matches[0]["asks"][0]["price"])
+            if not (math.isfinite(bid) and math.isfinite(ask) and 0 < bid < ask):
+                raise ValueError("Invalid bid/ask")
+            return {"bid": bid, "ask": ask, "mid": (bid + ask) / 2}
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            raise BrokerDataError("Malformed quote") from exc
+
     def open_market_order(self, req: OrderRequest) -> Optional[str]:
         """Dërgon një MARKET order me SL & TP.
 
@@ -75,6 +143,7 @@ class TradeExecutorV10:
         - tradeID (str) nëse çdo gjë shkon mirë
         - None nëse ka dështim (log detalet)
         """
+        raise RuntimeError("Order submission disabled until categories 2, 3 and 4 are validated")
         if req.units == 0:
             log(f"⚠️ Units 0 për {req.instrument}, nuk dërgojmë order.")
             return None
@@ -190,6 +259,7 @@ class TradeExecutorV10:
         - partial_close_engine (për BE / trailing)
         - safety_check / order_validation nëse duam të përditësojmë mbrojtjen.
         """
+        raise RuntimeError("SL/TP mutation disabled until categories 3 and 4")
         if sl_price is None and tp_price is None:
             return True  # asgjë për të bërë
 
@@ -226,6 +296,7 @@ class TradeExecutorV10:
         Nëse units është None → mbyllim gjithë tregtinë.
         Nëse units > 0 → mbyllim aq units (p.sh. për partial close 50%).
         """
+        raise RuntimeError("Trade closing disabled until categories 3 and 4")
         url = f"{self.base_url}/accounts/{self.account_id}/trades/{trade_id}/close"
         headers = {
             "Authorization": f"Bearer {self.api_key}",

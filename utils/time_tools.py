@@ -1,54 +1,56 @@
+"""Strict timezone-aware UTC conversion primitives."""
 from __future__ import annotations
-import datetime as dt
+
+from datetime import datetime, timedelta, time, timezone
 from typing import Optional
 
-# ------------------------------------------------------
-#  time_tools.py
-#
-#  Funksione ndihmëse për kohën:
-#   - konvertime UTC
-#   - parsing ISO
-#   - kontroll i dritareve kohore
-#   - orari aktual i tregut
-# ------------------------------------------------------
 
-class TimeToolsV10:
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    # -----------------------------------
-    #  Timestamp ISO
-    # -----------------------------------
+
+def require_utc(value: datetime) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("Timezone-aware datetime required")
+    return value.astimezone(timezone.utc)
+
+
+def iso_utc(value: datetime) -> str:
+    return require_utc(value).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc(value: str, *, legacy_naive_utc: bool = False) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("Missing ISO8601 timestamp")
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Invalid ISO8601 timestamp") from exc
+    if result.tzinfo is None or result.utcoffset() is None:
+        if not legacy_naive_utc:
+            raise ValueError("Naive timestamp rejected")
+        result = result.replace(tzinfo=timezone.utc)
+    return require_utc(result)
+
+
+class TimeTools:
     def now_iso(self) -> str:
-        return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        return iso_utc(utc_now())
 
-    # -----------------------------------
-    #  Parsing ISO8601 → datetime
-    # -----------------------------------
-    def parse_iso(self, ts: str) -> Optional[dt.datetime]:
+    def parse_iso(self, ts: str) -> Optional[datetime]:
         try:
-            if ts.endswith("Z"):
-                ts = ts.replace("Z", "+00:00")
-            return dt.datetime.fromisoformat(ts)
-        except:
+            return parse_utc(ts)
+        except ValueError:
             return None
 
-    # -----------------------------------
-    #  Kontrollon intervalin kohor
-    # -----------------------------------
-    def in_time_window(self, now: dt.datetime, start: dt.time, end: dt.time) -> bool:
-        t = now.time()
+    def in_time_window(self, now: datetime, start: time, end: time) -> bool:
+        t = require_utc(now).time()
         if start < end:
             return start <= t <= end
-        # interval që kalon mesnatën
         return t >= start or t <= end
 
-    # -----------------------------------
-    #  Diferencë minutash
-    # -----------------------------------
-    def minutes_diff(self, t1: dt.datetime, t2: dt.datetime) -> float:
-        return (t1 - t2).total_seconds() / 60.0
+    def minutes_diff(self, t1: datetime, t2: datetime) -> float:
+        return (require_utc(t1) - require_utc(t2)).total_seconds() / 60.0
 
-    # -----------------------------------
-    #  Shto minuta
-    # -----------------------------------
-    def add_minutes(self, t: dt.datetime, m: int) -> dt.datetime:
-        return t + dt.timedelta(minutes=m)
+    def add_minutes(self, t: datetime, m: int) -> datetime:
+        return require_utc(t) + timedelta(minutes=m)
