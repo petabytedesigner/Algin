@@ -162,5 +162,140 @@ class Category1Tests(unittest.TestCase):
 
 
 
+    def test_reject_invalid_broker_trade_identifiers_and_state(self):
+        invalid = [
+            {"id": None, "instrument": "EUR_USD", "currentUnits": "1", "price": "1.1"},
+            {"id": "7", "instrument": "EUR_USD", "currentUnits": "0", "price": "1.1"},
+            {"id": "7", "instrument": "EUR_USD", "currentUnits": "1", "price": "nan"},
+            {"id": "7", "instrument": "EUR_USD", "currentUnits": "1", "price": "1.1",
+             "state": "CLOSED"},
+            {"id": "7", "instrument": "EUR_USD", "currentUnits": "1", "price": "1.1",
+             "stopLossOrder": {"id": "sl"}},
+        ]
+        for trade in invalid:
+            with self.subTest(trade=trade):
+                with patch("execution.trade_executor.safe_request",
+                           return_value=FakeResponse({"trades": [trade]})):
+                    with self.assertRaises(BrokerDataError):
+                        TradeExecutor().get_open_trades()
+
+    def test_reject_duplicate_or_missing_broker_trade_snapshot(self):
+        trade = {"id": "7", "instrument": "EUR_USD", "currentUnits": "1",
+                 "price": "1.1000"}
+        invalid = (None, {"trades": {}}, {"trades": [trade, trade]},
+                   {"trades": [None]}, {"trades": {"id": "7"}})
+        for data in invalid:
+            with self.subTest(data=data):
+                with patch("execution.trade_executor.safe_request",
+                           return_value=FakeResponse(data)):
+                    with self.assertRaises(BrokerDataError):
+                        TradeExecutor().get_open_trades()
+
+    def test_safety_check_uses_verified_normalized_broker_snapshot(self):
+        from execution.safety_check import SafetyCheck
+        snapshot = [
+            {"id": "12", "instrument": "EUR_USD", "sl": None, "tp": 1.2},
+            {"id": "13", "instrument": "GBP_USD", "sl": 1.1, "tp": 1.3}
+        ]
+        with patch.object(TradeExecutor, "get_open_trades", return_value=snapshot):
+            result = SafetyCheck().check_all()
+        self.assertEqual(result["12"]["issues"], ["Mungon SL"])
+        self.assertEqual(result["13"]["issues"], [])
+        with patch.object(TradeExecutor, "get_open_trades",
+                          side_effect=BrokerDataError("unavailable")):
+            result = SafetyCheck().check_all()
+        self.assertIn("__broker_error__", result)
+        with patch.object(TradeExecutor, "get_open_trades", return_value=[]):
+            self.assertEqual(SafetyCheck().check_all(), {})
+
+    def test_no_unreachable_mutations_or_legacy_csv_writer(self):
+        root = Path(__file__).resolve().parents[1]
+        for path in (
+            "execution/trade_executor.py", "execution/partial_close_engine.py",
+            "execution/safety_check.py", "utils/common.py"
+        ):
+            code = (root / path).read_text(encoding="utf-8")
+            self.assertNotIn('safe_request("POST"', code)
+            self.assertNotIn('safe_request("PUT"', code)
+            self.assertNotIn("csv.writer(", code)
+        from execution import trade_executor, partial_close_engine, safety_check
+        self.assertFalse(hasattr(trade_executor, "csv_log"))
+        self.assertFalse(hasattr(partial_close_engine, "csv_log"))
+        self.assertFalse(hasattr(safety_check, "csv_log"))
+
+    def test_ambiguous_untradeable_and_invalid_quotes_rejected(self):
+        valid = {"instrument": "EUR_USD", "tradeable": True,
+                 "bids": [{"price": "1.1000"}],
+                 "asks": [{"price": "1.1002"}]}
+        invalid = [
+            {"prices": [valid, valid]},
+            {"prices": [{"instrument": "GBP_USD", "tradeable": True}]},
+            {"prices": [dict(valid, tradeable=False)]},
+            {"prices": [dict(valid, asks=[{"price": "nan"}])]},
+            {"prices": {}}
+        ]
+        for data in invalid:
+            with self.subTest(data=data):
+                with patch("execution.trade_executor.safe_request",
+                           return_value=FakeResponse(data)):
+                    with self.assertRaises(BrokerDataError):
+                        TradeExecutor().get_price("EUR_USD")
+
+    def test_legacy_pricing_reader_rejects_wrong_instrument(self):
+        from utils.common import get_pricing
+        data = {"prices": [{"instrument": "GBP_USD", "tradeable": True,
+                            "bids": [{"price": "1.10"}],
+                            "asks": [{"price": "1.11"}]}]}
+        with patch("utils.common.safe_request", return_value=FakeResponse(data)):
+            self.assertIsNone(get_pricing("EUR_USD"))
+
+    def test_trade_id_only_from_order_fill_trade_opened(self):
+        from execution.oanda_patch import extract_trade_id_from_order_response
+        self.assertEqual(extract_trade_id_from_order_response({
+            "orderFillTransaction": {"tradeOpened": {"tradeID": "9001"}}
+        }), "9001")
+        invalid = [
+            {"orderFillTransaction": {"id": "999"}},
+            {"orderCreateTransaction": {"id": "888"}},
+            {"orderFillTransaction": {"tradeReduced": {"tradeID": "9001"}}},
+            {"orderFillTransaction": {"tradesOpened": [{"tradeID": "9001"}]}},
+            None
+        ]
+        for data in invalid:
+            with self.subTest(data=data):
+                self.assertIsNone(extract_trade_id_from_order_response(data))
+
+    def test_account_scoped_candle_api_contract(self):
+        from data.data_handler import DataHandler
+        data = {"candles": [{
+            "time": "2026-11-15T09:00:00Z",
+            "mid": {"o": "1.1", "h": "1.2", "l": "1.0", "c": "1.1"}
+        }]}
+        with patch("data.data_handler.safe_request",
+                   return_value=FakeResponse(data)) as get:
+            candles = DataHandler().get_candles("EUR_USD", "M15", 1)
+        self.assertEqual(len(candles), 1)
+        url = get.call_args.args[1]
+        self.assertIn("/accounts/", url)
+        self.assertIn("/instruments/EUR_USD/candles", url)
+
+    def test_check_mode_does_not_touch_network(self):
+        with patch("requests.get") as get:
+            with patch("requests.post") as post:
+                with patch("requests.put") as put:
+                    self.assertEqual(main.main(["--check"]), 0)
+                    get.assert_not_called()
+                    post.assert_not_called()
+                    put.assert_not_called()
+
+    def test_http_read_failure_does_not_look_successful(self):
+        from requests.exceptions import Timeout
+        with patch("requests.get", side_effect=Timeout):
+            from utils.common import safe_request
+            self.assertIsNone(safe_request("GET", "https://example.invalid",
+                                           retries=1))
+
+
+
 if __name__ == "__main__":
     unittest.main()
