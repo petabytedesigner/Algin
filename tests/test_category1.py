@@ -272,8 +272,12 @@ class Category1Tests(unittest.TestCase):
             "complete": True,
             "mid": {"o": "1.1", "h": "1.2", "l": "1.0", "c": "1.1"}
         }]}
-        with patch("data.data_handler.safe_request",
-                   return_value=FakeResponse(data)) as get:
+        with (
+            patch.object(__import__("config"), "API_KEY", "fake-token"),
+            patch.object(__import__("config"), "ACCOUNT_ID", "fake-account"),
+            patch("data.data_handler.safe_request",
+                  return_value=FakeResponse(data)) as get
+        ):
             candles = DataHandler().get_candles("EUR_USD", "M15", 1)
         self.assertEqual(len(candles), 1)
         url = get.call_args.args[1]

@@ -59,8 +59,9 @@ def candles(*, direction="LONG", now=NOW, total=60):
     if direction == "LONG":
         out[30]["high"] = 1.1016
         out[47]["high"] = 1.1020
-        out[55].update(open=1.1000, close=1.1001)
-        out[56].update(open=1.1000, close=1.1003)
+        out[55].update(open=1.1000, low=1.0991, close=1.1001)
+        out[56].update(open=1.1000, high=1.1012, low=1.0989,
+                       close=1.1003)
         out[57].update(open=1.1003, low=1.1002,
                        high=1.1028, close=1.1026)
         out[58].update(open=1.1020, low=1.10195,
@@ -70,8 +71,9 @@ def candles(*, direction="LONG", now=NOW, total=60):
     else:
         out[30]["low"] = 1.0984
         out[47]["low"] = 1.0980
-        out[55].update(open=1.1000, close=1.0999)
-        out[56].update(open=1.1000, close=1.0997)
+        out[55].update(open=1.1000, high=1.1011, close=1.0999)
+        out[56].update(open=1.1000, high=1.1010, low=1.0988,
+                       close=1.0997)
         out[57].update(open=1.0997, high=1.0998,
                        low=1.0972, close=1.0974)
         out[58].update(open=1.0980, high=1.09805,
@@ -213,6 +215,7 @@ class BreakAndScoreTests(unittest.TestCase):
         self.assertIsNone(BreakoutRetest(expiry_bars=1).confirm(data,"LONG",.001))
         invalid = [dict(x) for x in data]
         invalid[57]["close"] = 1.1018
+        invalid[58]["close"] = 1.1019
         self.assertIsNone(BreakoutRetest().confirm(invalid, "LONG", .001))
         invalid = [dict(x) for x in data]
         invalid[58]["close"] = 1.1012
