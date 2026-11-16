@@ -102,6 +102,11 @@ def stable_signal_id(account_id: str, instrument: str, direction: str,
         or not isinstance(direction, str)
         or direction not in ("LONG", "SHORT")):
         raise ValueError("Unidentified account/signal direction/instrument")
+    # Require the UTC *opening timestamp* of a 15-minute candle.
+    # Otherwise an operator could submit the same bar under two slightly
+    # different timestamps and defeat durable signal deduplication.
+    if stamp.minute % 15 or stamp.second or stamp.microsecond:
+        raise ValueError("M15 candle must start on a UTC quarter-hour")
     key = json.dumps(
         (account_id, instrument, direction, "M15", iso_utc(stamp)),
         separators=(",", ":"), ensure_ascii=True
@@ -243,6 +248,8 @@ class TradeCoordinator:
                     minutes=config.SIGNAL_CANDLE_MAX_AGE_MINUTES
                 )):
                 return CoordinationResult("BLOCKED", "CANDLE_EXPIRED")
+            if now - candle < timedelta(minutes=15):
+                return CoordinationResult("BLOCKED", "CANDLE_NOT_COMPLETE")
             signal_id = stable_signal_id(
                 req.evidence.funds.account_id, req.signal.instrument,
                 req.signal.direction, candle,
