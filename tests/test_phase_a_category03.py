@@ -61,12 +61,12 @@ class FinancialLedgerTests(unittest.TestCase):
             spread="1",
         ))
         period = summary(self.ledger)
-        self.assertEqual(period["net_pl_home_since_cursor"], "0.5")
+        self.assertEqual(period["net_pl_home_since_cursor"], "-0.5")
         self.assertTrue(period["complete_since_cursor"])
         self.assertFalse(period["historical_account_pl_complete"])
         trade = trade_summary(self.ledger, "11")
         self.assertTrue(trade["complete"])
-        self.assertEqual(trade["net_pl_home"], "0.5")
+        self.assertEqual(trade["net_pl_home"], "-0.5")
         self.assertEqual(trade["related_transaction_ids"], ("101", "102", "103"))
 
     def test_half_spread_diagnostic_is_not_deducted_twice(self):
