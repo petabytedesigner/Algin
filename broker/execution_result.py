@@ -79,11 +79,28 @@ def classify_response(reply, attempt_id: str) -> ExecutionResult:
         try:
             if tx_fill.get("type") != "ORDER_FILL" or not _broker_id(tx_fill.get("id")):
                 return unknown("Missing/invalid fill transaction ID or type")
-            price = number(tx_fill["price"], "fill price", positive=True)
             units = number(tx_fill["units"], "filled units", zero_ok=False)
             trade_id = _open_info(tx_fill)
             reduced = tx_fill.get("tradeReduced")
             closed = tx_fill.get("tradesClosed", [])
+            # OANDA deprecated OrderFillTransaction.price. Exact prices now
+            # live in tradeOpened/tradeReduced/tradesClosed. Never mistake
+            # fullVWAP for a specific trade's execution price; it can differ
+            # with guaranteed stop-loss clamping. Legacy price is supported
+            # only when the per-trade price is absent.
+            opened = tx_fill.get("tradeOpened")
+            if opened is not None:
+                if "price" in opened:
+                    raw_price = opened["price"]
+                else:
+                    raw_price = tx_fill.get("price")
+            elif reduced is not None:
+                raw_price = reduced.get("price", tx_fill.get("price"))
+            elif isinstance(closed, list) and len(closed) == 1 and isinstance(closed[0], dict):
+                raw_price = closed[0].get("price", tx_fill.get("price"))
+            else:
+                raw_price = tx_fill.get("price")
+            price = number(raw_price, "trade execution price", positive=True)
             if reduced is not None:
                 if not isinstance(reduced, dict) or not _broker_id(reduced.get("tradeID")):
                     return unknown("Malformed tradeReduced")
