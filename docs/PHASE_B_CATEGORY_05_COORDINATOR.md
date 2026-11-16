@@ -9,7 +9,7 @@
 ## Rrjedha
 
 1. `CoordinatorRequest` kerkon `StrategySignal`, kohen e qiririt te konfirmuar M15, ATR, rregulla te instrumentit, `QuoteConversions`, `AccountEvidence` dhe `EntryGates` me verifikim te shprehur. `EntryGates` jane atestime te jashtme; nje vlere True ne fixture **nuk certifikon** kalendar real apo status real brokeri.
-2. `stable_signal_id` eshte determinist nga account, instrument, drejtim, timeframe dhe koha e qiririt. Score, grade dhe ora e procesit nuk krijojne identitet te ri. `IntentJournal` ndalon riperdorimin e sinjalit edhe pas refuzimit/filled, duke ruajtur gjurmen e tij.
+2. `stable_signal_id` eshte determinist nga account, instrument, drejtim, timeframe dhe **koha e hapjes se qiririt M15, e rreshtuar ne cerek-ore UTC dhe me 15 minuta te plota te mbyllura**. Score, grade dhe ora e procesit nuk krijojne identitet te ri. `IntentJournal` ndalon riperdorimin e sinjalit edhe pas refuzimit/filled, duke ruajtur gjurmen e tij.
 3. `preview()` kontrollon filtret, moshen e qiririt, ID e llogarise, journal snapshot, cursor-in e reconciler-it dhe ledger-in/historikun e riskut permes `build_risk_readiness`. `TradePlanner` prodhon vetem `TradePlan(preview_only=True)`. Mungesa e history-anchor, transaksionet `UNKNOWN`, porosite e papajtuara, filtrat e pa verifikuar ose nje signal i perseritur bllokojne planin.
 4. `simulate(initial, refresh, transport)` kerkon nje funksion sinkron `refresh()` dhe ribën te gjitha kontrollet e riskut pas planit fillestar. Nese identiteti, kursi, balanca, NAV, margin apo plani ndryshon, refuzon. `SimulatedOrderTransport.matches` verifikon edhe kuotën dhe account-in sintetik para kalimit ne `OrderEngine.submit`.
 5. `OrderEngine` ruan request-in ne journal para nje tentative te vetme sintetike, kontrollon preflight, spread, `priceBound`, units, SL/TP, dhe pas simulimit lexon pozicionin sintetik per te verifikuar mbrojtjen. `UNKNOWN` nga timeout-i sintetik **nuk ridërgohet**. Kontrolli i deduplikimit perdor journal-in durabel, jo vetem një set ne memorie.
@@ -34,6 +34,6 @@
 
 ## Evidence offline
 
-`tests/test_phase_b_category05.py` provon rrugen pozitive ne `OrderEngine`, filtrat negative, NAV/price recheck, identitetin e qiririt, idempotencen e journal-it, restart/duplicate, `UNKNOWN` dhe faktin qe transportet reale ose te personalizuara nuk thirren. Testet automatike GitHub Actions duhet te kalojne ne PR para merge.
+`tests/test_phase_b_category05.py` provon rrugen pozitive ne `OrderEngine`, filtrat negative, NAV/price recheck, identitetin e qiririt, idempotencen e journal-it, restart/duplicate, `UNKNOWN` dhe faktin qe transportet reale ose te personalizuara nuk thirren. 25 teste te dedikuara kontrollojne edhe qirinjtë e papërfunduar / te parreshtuar M15. Testet automatike GitHub Actions duhet te kalojne ne PR para merge.
 
 `main.py` dhe `OrderEngine` publik nuk ndryshohen nga kjo kategori. Nuk ka kredenciale apo porosi OANDA ne testim.
