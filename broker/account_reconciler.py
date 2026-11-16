@@ -200,6 +200,9 @@ class AccountReconciler:
                     new_remaining = sign * (abs(trade.current_units) - amount)
                     # Only an already-staged partial phase can be confirmed.
                     if not is_closed:
+                        if (tx.get("reason") is not None
+                            and tx["reason"] != "MARKET_ORDER_TRADE_CLOSE"):
+                            raise ReconcileError("Partial reduction has wrong broker reason")
                         phases = [
                             p for p, d in trade.partial_phases.items()
                             if d["state"] in ("INTENT", "UNKNOWN")
@@ -213,9 +216,51 @@ class AccountReconciler:
                     else:
                         if new_remaining != 0:
                             raise ReconcileError("Close transaction does not close all units")
+                        close_intent = state.get("close_intents", {}).get(trade_id)
+                        if close_intent is not None:
+                            if (close_intent["status"] not in ("INTENT", "UNKNOWN")
+                                or amount != number(
+                                    close_intent["units"], "intended closing units",
+                                    positive=True
+                                )
+                                or int(tid) <= int(close_intent["cursor_before"])):
+                                raise ReconcileError("Close conflicts with durable action")
+                            reason = tx.get("reason")
+                            if reason == "MARKET_ORDER_TRADE_CLOSE":
+                                disposition = "CONFIRMED"
+                            elif reason in (
+                                "STOP_LOSS_ORDER", "TAKE_PROFIT_ORDER",
+                                "GUARANTEED_STOP_LOSS_ORDER",
+                                "TRAILING_STOP_LOSS_ORDER",
+                                "MARKET_ORDER_MARGIN_CLOSEOUT",
+                            ):
+                                # A broker SL/TP/closeout can supersede a
+                                # pending manual/system close. Closure is
+                                # proven, but NOT attributed to our request.
+                                disposition = "SUPERSEDED"
+                            else:
+                                raise ReconcileError("Close origin/transaction unverified")
+                            state["close_intents"][trade_id] = dict(
+                                close_intent, status=disposition,
+                                confirmed_transaction_id=tid,
+                            )
+                        # A confirmed broker close makes any outstanding
+                        # BE/partial action inapplicable. Preserve it as
+                        # SUPERSEDED, never claim management confirmation.
+                        phases = {
+                            p: dict(v, state=(
+                                "SUPERSEDED" if v["state"] in ("INTENT", "UNKNOWN")
+                                else v["state"]
+                            )) for p, v in trade.partial_phases.items()
+                        }
+                        be = (
+                            "SUPERSEDED" if trade.be_state in ("INTENT", "UNKNOWN")
+                            else trade.be_state
+                        )
                         trade = replace(
                             trade, current_units=Decimal("0"), closed=True,
-                            closed_at=parse_utc(tx["time"])
+                            closed_at=parse_utc(tx["time"]),
+                            be_state=be, partial_phases=phases,
                         )
                     realized = number(item["realizedPL"], "realized P/L")
                     trade = replace(
@@ -247,10 +292,11 @@ class AccountReconciler:
                 trade_id = tx.get("tradeID")
                 if trade_id in state["trades"]:
                     trade = TradeRecord.from_dict(state["trades"][trade_id])
-                    if trade.be_state in ("INTENT", "UNKNOWN") and (
-                        number(tx["price"], "confirmed stop", positive=True)
-                        == trade.entry_price
-                    ):
+                    if (trade.be_state in ("INTENT", "UNKNOWN")
+                        and tx.get("reason") in (None, "CLIENT_ORDER", "REPLACEMENT")
+                        and number(tx["price"], "confirmed stop", positive=True)
+                            == trade.entry_price):
+
                         trade = trade.with_stop_confirmed(tx["price"])
                         state["trades"][trade_id] = trade.to_dict()
                     else:
@@ -295,6 +341,7 @@ class AccountReconciler:
         proposed["counted_closures"] = list(persisted["counted_closures"])
         proposed["closed_results"] = dict(persisted["closed_results"])
         proposed["cooldowns"] = dict(persisted["cooldowns"])
+        proposed["close_intents"] = dict(persisted.get("close_intents", {}))
         # Legacy v1 snapshots remain readable. Migration begins only AFTER
         # the existing broker cursor: past financial history is not invented.
         legacy_finance = "financial_ledger" not in persisted
@@ -357,6 +404,11 @@ class AccountReconciler:
                 blockers.append("Open trade missing without confirmed close " + tid)
         if orders:
             blockers.append("Unreconciled pending broker orders")
+        if any(
+            v["status"] in ("INTENT", "UNKNOWN")
+            for v in proposed["close_intents"].values()
+        ):
+            blockers.append("Unresolved explicit trade-close intent")
         if any(a["status"] in ("PREPARED", "IN_FLIGHT", "UNKNOWN") for a in attempts):
             blockers.append("Ambiguous broker submission in journal")
         if any(TradeRecord.from_dict(v).be_state in ("INTENT", "UNKNOWN")
@@ -373,7 +425,8 @@ class AccountReconciler:
                 persisted["cursor"], (), tuple(blockers), (),
                 entry_allowed=False,
             )
-        if cursor != persisted["cursor"] or legacy_finance:
+        if (cursor != persisted["cursor"] or legacy_finance
+            or "close_intents" not in persisted):
             # Persist financial evidence and transaction state + cursor in
             # ONE checksummed atomic replacement; never a sidecar cursor.
             self.store.mutate(
