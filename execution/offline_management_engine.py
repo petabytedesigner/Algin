@@ -321,8 +321,11 @@ class OfflineManagementEngine:
             record = TradeRecord.from_dict(state["trades"][tid])
             if operation == "BE":
                 done = record.be_state == "CONFIRMED"
+                confirmed_tx = record.be_transaction_id
             elif operation == "PARTIAL":
-                done = record.partial_phases[command.phase]["state"] == "CONFIRMED"
+                part = record.partial_phases[command.phase]
+                done = part["state"] == "CONFIRMED"
+                confirmed_tx = part.get("transaction_id")
             else:
                 close = state.get("close_intents", {}).get(tid, {})
                 if close.get("status") == "SUPERSEDED":
@@ -333,13 +336,12 @@ class OfflineManagementEngine:
                     )
                 done = (close.get("status") == "CONFIRMED"
                         and record.closed and record.result_counted)
-            if not done:
+                confirmed_tx = close.get("confirmed_transaction_id")
+            if not done or confirmed_tx is None:
                 return self._result(
                     operation, tid, transport, "UNKNOWN", "NO_VERIFIED_BROKER_EFFECT"
                 )
-            tx = state["cursor"] if operation != "CLOSE" else (
-                state["close_intents"][tid]["confirmed_transaction_id"]
-            )
+            tx = confirmed_tx
             return self._result(
                 operation, tid, transport, "CONFIRMED",
                 "GET_ONLY_TRANSACTION_REPLAY_PROVED", tx
@@ -349,8 +351,20 @@ class OfflineManagementEngine:
                 operation, tid, transport, "UNKNOWN", "BROKER_REPLAY_INCONCLUSIVE"
             )
 
+    def _ready_to_stage(self, transport):
+        # Reject untrusted/real transport BEFORE touching durable state.
+        return (
+            self.reconciler._active
+            and type(transport) is SyntheticLifecycleBroker
+            and self.reconciler.transport is transport
+            and config.ORDER_WRITES_ENABLED is False
+            and _PRACTICE_WRITES_RELEASED is False
+        )
+
     def stage_and_simulate_be(self, tid, rules: InstrumentRules, *, bid, ask,
                               transport):
+        if not self._ready_to_stage(transport):
+            return ManagementResult("BLOCKED", tid, "BE", "OFFLINE_GATE_REQUIRED")
         self.manager.stage_break_even(tid, rules, bid=bid, ask=ask)
         saved = self.reconciler.store.load()
         cmd = build_command(
@@ -362,6 +376,8 @@ class OfflineManagementEngine:
         self, tid, rules: InstrumentRules, *, bid, ask, transport,
         phase="phase1", fraction=Decimal("0.5")
     ):
+        if not self._ready_to_stage(transport):
+            return ManagementResult("BLOCKED", tid, "PARTIAL", "OFFLINE_GATE_REQUIRED")
         self.manager.stage_partial(
             tid, rules, bid=bid, ask=ask,
             phase=phase, fraction=fraction,
@@ -374,6 +390,8 @@ class OfflineManagementEngine:
         return self._operate(cmd, transport)
 
     def stage_and_simulate_close(self, tid, *, transport, source="SYSTEM"):
+        if not self._ready_to_stage(transport):
+            return ManagementResult("BLOCKED", tid, "CLOSE", "OFFLINE_GATE_REQUIRED")
         self.manager.stage_close(tid, source=source)
         saved = self.reconciler.store.load()
         cmd = build_command(
