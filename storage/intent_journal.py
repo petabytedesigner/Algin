@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 from typing import Any, Optional
 
 from utils.time_tools import iso_utc, parse_utc, utc_now
@@ -65,18 +66,27 @@ class IntentJournal:
             raise JournalError("Journal already locked; manual recovery required") from exc
         except OSError as exc:
             raise JournalError("Unable to acquire durable journal lock") from exc
+        owner = secrets.token_hex(24)
+        # If durability fails before yield, the created lock is retained
+        # as a blocker requiring operator inspection.
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(f"pid={os.getpid()} account={self.account_id} owner={owner}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(f"pid={os.getpid()} account={self.account_id}\n")
-                handle.flush()
-                os.fsync(handle.fileno())
             yield
         finally:
-            # If the process crashes, the lock remains and blocks all writes.
+            # Only the lock we created may be removed. A replacement lock
+            # is never treated as our own (including a symlink).
             try:
+                if (self.lock_path.is_symlink()
+                    or not self.lock_path.read_text(encoding="ascii").strip().endswith(
+                        " owner=" + owner
+                    )):
+                    raise JournalError("Journal lock owner changed; manual recovery required")
                 self.lock_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                raise JournalError("Cannot safely release journal lock") from exc
 
     def _load(self) -> dict:
         # A dangling symlink has exists() == False. Check it FIRST.
@@ -123,7 +133,6 @@ class IntentJournal:
 
     def _store(self, data: dict):
         # Same-filesystem replacement; fsync file and containing directory.
-        import secrets
         temp = self.path.with_name(self.path.name + "." + secrets.token_hex(8) + ".tmp")
         fd = None
         try:
