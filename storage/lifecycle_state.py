@@ -271,15 +271,14 @@ class LifecycleStore:
     def initialize(self, cursor, trades=None):
         if not isinstance(cursor, str) or not _TRADE.fullmatch(cursor):
             raise StateError("Cannot bootstrap without valid broker cursor")
+        from broker.financial_ledger import initial_ledger
         initial = {
             "version": self.VERSION, "account_id": self.account_id,
             "environment": self.environment, "cursor": cursor,
             "trades": trades if trades is not None else {},
             "processed_transactions": [], "counted_closures": [],
             "closed_results": {}, "cooldowns": {},
-            "financial_ledger": __import__(
-                "broker.financial_ledger", fromlist=["initial_ledger"]
-            ).initial_ledger(cursor),
+            "financial_ledger": initial_ledger(cursor),
         }
         with self._exclusive():
             if self.path.exists() or self.path.is_symlink():
