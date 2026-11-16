@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import requests
 
 import config
+from broker.oanda_v20_contract import price_tradeable
 from utils.time_tools import iso_utc, utc_now
 
 
@@ -64,10 +65,7 @@ def get_pricing(instrument: str) -> Optional[Dict[str, float]]:
         matches = [
             price for price in prices
             if isinstance(price, dict) and price.get("instrument") == instrument
-            and (
-                (price.get("status") == "tradeable" and price.get("tradeable", True) is not False)
-                if "status" in price else price.get("tradeable") is True
-            )
+            and price_tradeable(price)
         ]
         if len(matches) != 1:
             return None
