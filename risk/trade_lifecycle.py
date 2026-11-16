@@ -19,7 +19,7 @@ class LifecycleError(ValueError):
 
 
 _NUMERIC_ID = re.compile(r"^[0-9]{1,50}$")
-_PHASES = frozenset({"NONE", "INTENT", "UNKNOWN", "CONFIRMED"})
+_PHASES = frozenset({"NONE", "INTENT", "UNKNOWN", "CONFIRMED", "SUPERSEDED"})
 _GRADE = frozenset({"A", "B"})
 
 
