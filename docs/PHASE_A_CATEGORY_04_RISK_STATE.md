@@ -28,7 +28,7 @@ Per nje pozicion te hapur ruhet konservativisht `risk_pct` fillestar, pavaresish
 
 `AccountReconciler.run()` e kryen pensionimin e tentatives vetem **pasi** state/cursor jane ruajtur atomikisht. Nese deshton shkrimi i journal-it pas commit-it te lifecycle, intent-i mbetet `FILLED` e bllokues dhe nje pajtim i mevonshem mund ta pensionoje idempotentisht. ID e sinjalit origjinal nuk mund te riperdoret; historiku journal nuk fshihet. Mbyllja pa provenience nuk liron rezervimin.
 
-**Kujdes:** `OrderEngine._account_preflight()` ende zbaton ndalesen e meparshme ndaj `FILLED` ne journal. Lidhja e plote e pipeline-it dhe hapja e tregtive te reja do te trajtohen ne Fazën B / Kategoria 05, me verifikim te gjendjes se re. Kategoria 04 nuk e heq kete barriere.
+**Kujdes:** `IntentJournal.begin(..., lifecycle_store=store)` kerkon nje `LifecycleStore` te validuar kur ne journal ekziston ndonje tentative `FILLED/retired`; vetem marker-i `retired` nuk liron kapacitetin pa proven e mbylljes. `OrderEngine._account_preflight()` ende zbaton ndalesen e meparshme ndaj `FILLED` ne journal. Lidhja e plote e pipeline-it dhe hapja e tregtive te reja do te trajtohen ne Fazën B / Kategoria 05, me verifikim te gjendjes se re. Kategoria 04 nuk e heq kete barriere.
 
 ## 3. LossState: vetem me anchor te vertetuar
 
@@ -36,7 +36,7 @@ Per nje pozicion te hapur ruhet konservativisht `risk_pct` fillestar, pavaresish
 
 - Nje GET i çastit nuk provon NAV ne fillim te dites, peak NAV historik apo histori te plote te humbjeve. Asnje anchor nuk sajohet automatikisht.
 - `LossState.verified=True` vetem nese anchor-i i siguruar eshte per llogarine, cursor-in dhe diten e njejte, ledger-i mbulon periudhen e dites dhe *çdo* transaksion ka shume financiare te plote.
-- Shuma konservative e humbjes ditore llogarit debitet negative te transaksioneve monetare pas `day_start_cursor`, pa supozuar se fitimet kompensojne humbjet per qellimin e kufirit.
+- Shuma konservative e humbjes ditore llogarit debitet negative te transaksioneve monetare pas `day_start_cursor`. Kur nje `ORDER_FILL` mbyll disa tregti, merr parasysh edhe kembet humbese te atribuara vecmas, edhe nese shuma e pergjithshme eshte pozitive; nuk u shton perseri shpenzimet e agreguara te se njejtes mbushje. Financat e paatribuara bllokojne verifikimin.
 - Seria e humbjeve merret nga mbylljet e llogaritura nga `trade_summary()` me kosto neto te certifikuar; `closed_results.pl` **nuk** perdoret si neto. Mbylljet para cursor-it anchor nuk numerohen serish.
 - Cooldown-et konservative perfshijne si regjistrimet ekzistuese, ashtu edhe çdo mbyllje neto negative te verifikuar. Kur history, kostot, anchor-i ose atribuuimi nuk verifikohet, `LossState.verified=False`.
 
@@ -50,4 +50,4 @@ Anchor-i i riskut duhet te vijë nga nje mekanizem i ardhshëm rigoroz i histori
 
 `tests/test_phase_a_category04.py` teston pozicione aktive, rezervime UNKNOWN, porosi pending, journal retirement te konfirmuar dhe idempotent, deshtim atomik/backup, ID dhe cursor te gabuar, historik neto te plote e te paplote, NAV/dite/cursor te gabuar dhe kufizimin e `entry_allowed`.
 
-Te gjithe testet ne GitHub Actions mbeten offline; asnje POST/PUT/PATCH/DELETE broker nuk kryhet.
+U shtuan 14 teste te dedikuara ne `tests/test_phase_a_category04.py`; suita e plote ka 271 teste pas kesaj kategorie (per t'u konfirmuar nga CI i commit-it final). Testet ne GitHub Actions mbeten offline; asnje POST/PUT/PATCH/DELETE broker nuk kryhet.
