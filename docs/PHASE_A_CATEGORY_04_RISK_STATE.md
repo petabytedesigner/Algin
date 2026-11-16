@@ -50,4 +50,4 @@ Anchor-i i riskut duhet te vijë nga nje mekanizem i ardhshëm rigoroz i histori
 
 `tests/test_phase_a_category04.py` teston pozicione aktive, rezervime UNKNOWN, porosi pending, journal retirement te konfirmuar dhe idempotent, deshtim atomik/backup, ID dhe cursor te gabuar, historik neto te plote e te paplote, NAV/dite/cursor te gabuar dhe kufizimin e `entry_allowed`.
 
-U shtuan 14 teste te dedikuara ne `tests/test_phase_a_category04.py`; suita e plote ka 271 teste pas kesaj kategorie (per t'u konfirmuar nga CI i commit-it final). Testet ne GitHub Actions mbeten offline; asnje POST/PUT/PATCH/DELETE broker nuk kryhet.
+U shtuan 16 teste te dedikuara ne `tests/test_phase_a_category04.py`; suita e plote ka 273 teste pas kesaj kategorie (per t'u konfirmuar nga CI i commit-it final). Testet ne GitHub Actions mbeten offline; asnje POST/PUT/PATCH/DELETE broker nuk kryhet.
