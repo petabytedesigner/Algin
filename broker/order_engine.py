@@ -231,6 +231,15 @@ class OrderEngine:
             actual_units = number(trade["currentUnits"], "trade units", zero_ok=False)
             if actual_units != result.filled_units:
                 raise ValueError("Filled units and live trade units disagree")
+            # OANDA Trade.price is the trade's true average open price.
+            # When provided, it must agree with the authoritative per-trade
+            # ORDER_FILL price before certifying ownership/protection.
+            if ("price" in trade and (
+                result.fill_price is None
+                or number(trade["price"], "live trade price", positive=True)
+                != result.fill_price
+            )):
+                raise ValueError("Trade GET execution price disagrees with fill")
             sl = number(trade["stopLossOrder"]["price"], "SL", positive=True)
             tp = number(trade["takeProfitOrder"]["price"], "TP", positive=True)
             if (sl != number(expected["stopLossOnFill"]["price"], "expected SL")
