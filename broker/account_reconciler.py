@@ -10,6 +10,9 @@ from decimal import Decimal
 from typing import Any
 
 from broker.practice_transport import BrokerReply, PracticeTransport
+from broker.financial_ledger import (
+    FinancialEvidenceError, initial_ledger, record_transaction
+)
 from risk.trade_lifecycle import LifecycleError, TradeRecord
 from risk.trade_plan import number
 from storage.lifecycle_state import LifecycleStore, ProcessLease, StateError
@@ -251,6 +254,11 @@ class AccountReconciler:
                         state["trades"][trade_id] = trade.to_dict()
                     else:
                         raise ReconcileError("Unattributed stop-loss amendment")
+            # The financial event is journaled in the SAME atomic state
+            # snapshot as this transaction ID and the broker cursor.
+            # Unknown/missing money is represented as incomplete evidence,
+            # never silently as zero.
+            record_transaction(state["financial_ledger"], tx)
             seen.add(tid)
             state["processed_transactions"].append(tid)
         state["cursor"] = target_cursor
@@ -286,6 +294,16 @@ class AccountReconciler:
         proposed["counted_closures"] = list(persisted["counted_closures"])
         proposed["closed_results"] = dict(persisted["closed_results"])
         proposed["cooldowns"] = dict(persisted["cooldowns"])
+        # Legacy v1 snapshots remain readable. Migration begins only AFTER
+        # the existing broker cursor: past financial history is not invented.
+        legacy_finance = "financial_ledger" not in persisted
+        proposed["financial_ledger"] = (
+            initial_ledger(persisted["cursor"])
+            if legacy_finance else {
+                "baseline_cursor": persisted["financial_ledger"]["baseline_cursor"],
+                "events": dict(persisted["financial_ledger"]["events"]),
+            }
+        )
         new_closures = []
         if cursor != persisted["cursor"]:
             payload = self._read("/transactions/sinceid", {"id": persisted["cursor"]})
@@ -349,9 +367,9 @@ class AccountReconciler:
                 persisted["cursor"], (), tuple(blockers), (),
                 entry_allowed=False,
             )
-        if cursor != persisted["cursor"]:
-            # Persist the complete validated transaction state + cursor in
-            # ONE checksummed atomic replacement; never cursor-only.
+        if cursor != persisted["cursor"] or legacy_finance:
+            # Persist financial evidence and transaction state + cursor in
+            # ONE checksummed atomic replacement; never a sidecar cursor.
             self.store.mutate(
                 lambda s: s.update(proposed),
                 expected_cursor=persisted["cursor"],

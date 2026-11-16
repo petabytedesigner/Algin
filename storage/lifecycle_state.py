@@ -157,11 +157,13 @@ class LifecycleStore:
                 raise StateError("Cannot safely release lifecycle lock") from exc
 
     def _validate(self, data):
-        if not isinstance(data, dict) or set(data) != {
+        legacy_fields = {
             "version", "account_id", "environment", "cursor",
             "trades", "processed_transactions", "counted_closures",
             "closed_results", "cooldowns"
-        }:
+        }
+        if (not isinstance(data, dict) or
+            set(data) not in (legacy_fields, legacy_fields | {"financial_ledger"})):
             raise StateError("Unknown lifecycle schema")
         if (data["version"] != self.VERSION or data["account_id"] != self.account_id
             or data["environment"] != self.environment):
@@ -190,6 +192,17 @@ class LifecycleStore:
             data["processed_transactions"]
         ):
             raise StateError("Counted closure has no processed transaction")
+        if "financial_ledger" in data:
+            from broker.financial_ledger import (
+                FinancialEvidenceError, validate_ledger
+            )
+            try:
+                validate_ledger(
+                    data["financial_ledger"], cursor=data["cursor"],
+                    processed=data["processed_transactions"],
+                )
+            except FinancialEvidenceError as exc:
+                raise StateError("Financial evidence/cursor mismatch") from exc
         if not isinstance(data["closed_results"], dict) or not isinstance(data["cooldowns"], dict):
             raise StateError("Invalid outcome/cooldown history")
         for trade_id, outcome in data["closed_results"].items():
@@ -258,12 +271,14 @@ class LifecycleStore:
     def initialize(self, cursor, trades=None):
         if not isinstance(cursor, str) or not _TRADE.fullmatch(cursor):
             raise StateError("Cannot bootstrap without valid broker cursor")
+        from broker.financial_ledger import initial_ledger
         initial = {
             "version": self.VERSION, "account_id": self.account_id,
             "environment": self.environment, "cursor": cursor,
             "trades": trades if trades is not None else {},
             "processed_transactions": [], "counted_closures": [],
             "closed_results": {}, "cooldowns": {},
+            "financial_ledger": initial_ledger(cursor),
         }
         with self._exclusive():
             if self.path.exists() or self.path.is_symlink():
