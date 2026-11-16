@@ -250,6 +250,8 @@ class TradeCoordinator:
                 return CoordinationResult("BLOCKED", "CANDLE_EXPIRED")
             if now - candle < timedelta(minutes=15):
                 return CoordinationResult("BLOCKED", "CANDLE_NOT_COMPLETE")
+            if candle.minute % 15 or candle.second or candle.microsecond:
+                return CoordinationResult("BLOCKED", "CANDLE_ALIGNMENT_INVALID")
             signal_id = stable_signal_id(
                 req.evidence.funds.account_id, req.signal.instrument,
                 req.signal.direction, candle,
