@@ -209,6 +209,37 @@ def _snapshot_exposure(account, state, attempts, broker_trades, broker_orders):
     ), reasons
 
 
+def _transaction_downside(event):
+    """Conservative debit of a transaction, without netting opposite trades.
+
+    One profitable ORDER_FILL can include a losing trade. Count verified
+    losing trade legs without double-counting account-level cash debits.
+    """
+    value = event.get("account_net")
+    if value is None:
+        raise RiskEvidenceError("Financial transaction lacks net cash evidence")
+    account_net = number(value, "account net")
+    downside = max(Decimal("0"), -account_net)
+    if event.get("type") != "ORDER_FILL":
+        return downside
+    if event.get("allocation_complete") is not True:
+        raise RiskEvidenceError("Order fill loss attribution is incomplete")
+    effects = event.get("trade_effects")
+    if not isinstance(effects, list):
+        raise RiskEvidenceError("Malformed trade loss allocation")
+    per_trade_downside = Decimal("0")
+    for effect in effects:
+        components = effect["components"]
+        net = number(components["realized_pl"], "trade realized")
+        net += number(components["financing"], "trade financing")
+        if len(effects) == 1:
+            net -= number(event["components"]["commission"], "commission")
+            net -= number(event["components"]["guaranteed_fee"], "guaranteed fee")
+        if net < 0:
+            per_trade_downside -= net
+    return max(downside, per_trade_downside)
+
+
 def _losses_from_anchor(account, state, anchor, *, now):
     """Never infer streak, peak or day-start NAV from a single account GET."""
     fallback = LossState(peak_nav=account.nav, consecutive_losses=0, verified=False)
@@ -233,11 +264,10 @@ def _losses_from_anchor(account, state, anchor, *, now):
     loss_home = Decimal("0")
     for tid, event in ledger["events"].items():
         if int(tid) > int(anchor.day_start_cursor):
-            value = event["account_net"]
-            if value is not None:
-                pl = number(value, "verified financial transaction")
-                if pl < 0:
-                    loss_home -= pl
+            try:
+                loss_home += _transaction_downside(event)
+            except (RiskEvidenceError, PlanRejected, KeyError, TypeError):
+                return fallback, ("DAILY_LOSS_ATTRIBUTION_INCOMPLETE",)
     closes = []
     for trade_id, closed in state["closed_results"].items():
         # The starting streak is attested at the day-start cursor.
