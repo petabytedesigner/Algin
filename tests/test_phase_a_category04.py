@@ -12,9 +12,10 @@ import unittest
 
 from test_category4 import LifecycleFixture
 from broker.account_reconciler import ReconcileReport
-from broker.financial_ledger import record_transaction
+from broker.financial_ledger import record_transaction, parse_transaction
 from risk.reconciled_account import (
     RiskEvidenceError, RiskHistoryAnchor, build_risk_readiness,
+    _transaction_downside,
 )
 from risk.trade_lifecycle import TradeRecord
 from risk.trade_plan import AccountFunds
@@ -184,6 +185,40 @@ class ExposureAndRetirementTests(LifecycleFixture):
                 account(opened=1), self.store.load(), self.journal.snapshot(),
                 broker_trades=foreign, broker_orders=(), report=report, now=NOW
             )
+
+
+class MultiTradeRiskAccountingTests(unittest.TestCase):
+    def test_profitable_aggregate_does_not_hide_losing_trade_leg(self):
+        event = parse_transaction({
+            "id": "102", "type": "ORDER_FILL", "pl": "5",
+            "financing": "0", "commission": "0",
+            "guaranteedExecutionFee": "0",
+            "tradesClosed": [
+                {"tradeID": "11", "units": "-100", "realizedPL": "-10",
+                 "financing": "0", "guaranteedExecutionFee": "0"},
+                {"tradeID": "12", "units": "-100", "realizedPL": "15",
+                 "financing": "0", "guaranteedExecutionFee": "0"},
+            ],
+        })
+        self.assertEqual(event["account_net"], "5")
+        self.assertTrue(event["allocation_complete"])
+        self.assertEqual(_transaction_downside(event), D("10"))
+
+    def test_unallocated_order_fill_cannot_certify_daily_loss(self):
+        event = parse_transaction({
+            "id": "102", "type": "ORDER_FILL", "pl": "5",
+            "financing": "0", "commission": "2",
+            "guaranteedExecutionFee": "0",
+            "tradesClosed": [
+                {"tradeID": "11", "units": "-100", "realizedPL": "-10",
+                 "financing": "0", "guaranteedExecutionFee": "0"},
+                {"tradeID": "12", "units": "-100", "realizedPL": "15",
+                 "financing": "0", "guaranteedExecutionFee": "0"},
+            ],
+        })
+        self.assertFalse(event["allocation_complete"])
+        with self.assertRaises(RiskEvidenceError):
+            _transaction_downside(event)
 
 
 class VerifiedLossFixture(LifecycleFixture):
