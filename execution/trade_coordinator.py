@@ -339,10 +339,16 @@ class TradeCoordinator:
                 signal_id=updated.signal_id, now=latest.now,
             )
         except (PreflightRejected, BrokerWriteDisabled, JournalError):
+            # The same exception class may occur AFTER a simulated POST
+            # (e.g. journal fsync fails while storing the fill). Never report
+            # such a result as a safe preflight rejection.
+            if transport.post_count:
+                return CoordinationResult("UNKNOWN", "SYNTHETIC_OUTCOME_UNCERTAIN",
+                                          first.signal_id, updated.plan)
             return CoordinationResult("BLOCKED", "ORDER_PREFLIGHT_OR_JOURNAL_BLOCK",
                                       first.signal_id, updated.plan)
         except Exception:
-            # Do not attempt another submit after an ambiguous boundary.
+            # Conservative even if the exception happened before the call.
             return CoordinationResult("UNKNOWN", "SYNTHETIC_OUTCOME_UNCERTAIN",
                                       first.signal_id, updated.plan)
         if execution.outcome == Outcome.UNKNOWN:
