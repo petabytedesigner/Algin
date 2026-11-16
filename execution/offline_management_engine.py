@@ -260,6 +260,15 @@ class OfflineManagementEngine:
         # Independent synthetic account GET and trade provenance check.
         cursor, live_trades, orders = self.reconciler._account()
         live = live_trades.get(command.trade_id)
+        expected_open = {
+            key for key, entry in saved["trades"].items()
+            if not TradeRecord.from_dict(entry).closed
+        }
+        journal = self.reconciler.journal.snapshot()
+        if (any(x["status"] in ("PREPARED", "IN_FLIGHT", "UNKNOWN")
+                for x in journal)
+            or set(live_trades) != expected_open):
+            raise ManagementContractError("Broker inventory or durable intent changed")
         if (cursor != saved["cursor"] or orders
             or not isinstance(live, dict)
             or live.get("instrument") != record.instrument
