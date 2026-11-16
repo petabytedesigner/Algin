@@ -140,3 +140,8 @@ Kufizimet e mbetura pas këtij zhvillimi:
 
 **Kategoria 6: baza teknike e auditimit dhe regresionit offline
 e plotësuar. Aktivizimi i porosive mbetet i bllokuar.**
+
+Verifikimi offline i degës: **217/217 teste PASS**, compileall dhe
+`python main.py --check` PASS —
+[GitHub Actions run 43787120534](https://github.com/petabytedesigner/Algin/actions/runs/43787120534).
+Kjo nuk përfaqëson provë tregtimi real në OANDA Practice.

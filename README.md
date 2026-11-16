@@ -546,22 +546,21 @@ python -m unittest discover -s tests -v
 python main.py --check
 ```
 
-### 11.2 Gjendja e testimit në integrimin e Kategorisë 6
+### 11.2 Gjendja e testimit pas plotësimit teknik të Kategorisë 6
 
-- Në PR #7, suite e dokumentuar **189/189** teste offline kaloi.
-- Gjashtë grupet e kontrolleve të kategorive 1–6 për PR-në përfundimtare kaluan.
-- `compileall` dhe `main.py --check` kaluan.
-- Pas merge u verifikua përputhja e pemës së kodit me degën e testuar.
-- Këto janë **evidenca të ekzekutimeve të mëparshme**, jo pretendim që testet u riekzekutuan sot mbi brokerin.
+- PR #7 historikisht kaloi **189/189** teste offline.
+- Për plotësimin 6A–6D, [GitHub Actions run 43787120534](https://github.com/petabytedesigner/Algin/actions/runs/43787120534) kaloi **217/217 teste** në degën e zhvillimit.
+- `compileall`, `python main.py --check` dhe testet e regresionit të kategorive të mëparshme kaluan.
+- Testet e reja mbulojnë replay të auditimit, CSV të korruptuar, heartbeat të vjetruar, refuzime, klasifikim SL/TP dhe cikël fake-broker me BE/partial/close/restart.
+- Workflow `category6.yml` tani kontrollon PR-të dhe push-et në `main`; kjo nuk i ndryshon workflow-t e kategorive të tjera.
+- Këto janë **prova offline të GitHub Actions**, jo prova të ekzekutimit real të tregtive te OANDA.
 
-Shiko [PR #7](https://github.com/petabytedesigner/Algin/pull/7) dhe [GitHub Actions — Category 6](https://github.com/petabytedesigner/Algin/actions/runs/43763792994). Workflow-t e kategorive ndodhen në `.github/workflows/`. Ato përdorin Python 3.11 dhe testet offline. Në versionin aktual të workflow-ve, verifikimi në `main` pas merge nuk është ende portë e pavarur dhe e vazhdueshme për të gjitha ndryshimet.
-
-### 11.3 Çfarë NUK mbulohet nga 189 teste
+### 11.3 Çfarë NUK mbulohet nga 217 teste
 
 - Një cikël i plotë me porosi të vërtetë në OANDA Practice.
 - Reconciliation mbi historik real me financime, komisione, stop amend, partial-close dhe restart të papritur.
 - Sjellja e plotë kur klienti humbet përgjigjen por brokeri ka pranuar urdhrin.
-- Testi i përbashkët i të gjitha moduleve në pipeline-in aktiv të hyrjes.
+- Pipeline-i i plotë aktiv nga sinjali M15, përmes ExposureBook/LossState, te ekzekutimi real; fake-broker E2E mbulon OrderEngine/lifecycle, por jo këtë lidhje të ardhshme.
 - Coverage i matur për çdo degë dhe property/fuzz testing i gjerë.
 - Termux/Android si proces i vazhdueshëm në mjedisin përfundimtar.
 - Backtest/replay, forward test, fitimshmëria neto dhe performanca live.
@@ -669,12 +668,12 @@ Detajet aktuale dhe varësitë operative gjenden te
 | --- | --- |
 | L01 | **P58:** lidhja e të gjitha `CSV_LOG_*` me ngjarje të verifikuara |
 | L02 | **P60:** gjurma e plotë signal → risk → request → result → trade → close |
-| L03 | Zëvendësimi i `STRATEGY_NO_SIGNAL` gjenerik me kode refuzimi specifike |
+| L03 | **Kodet specifike të refuzimit u shtuan** në Strategy/main; klasifikimi plotësues në pipeline-in aktiv mbetet për F2 |
 | L04 | Përjashtimi i `csv/events.csv` nga Git **u zbatua**; politika afatgjatë e rotacionit/ruajtjes së logeve mbetet për host-in |
-| L05 | Detektim i CSV të ndërprerë, rotacion/retention dhe test rikuperimi |
-| L06 | Monitor i jashtëm për heartbeat të vjetruar dhe proces të ndalur |
-| L07 | Raport me loss streak, ekspozim të rezultateve ekstreme, net P/L të verifikuar |
-| L08 | Trajtim i qëndrueshëm i dështimit të audit logging pa humbur arsyen e bllokimit |
+| L05 | **Detektimi i CSV të ndërprerë u shtua** dhe refuzon riparimin automatik; rotacion/retention mbeten për host-in |
+| L06 | **Heartbeat.inspect / --heartbeat-check u shtuan**; monitori i jashtëm për host-in mbetet i pambyllur |
+| L07 | **Statistikat e streak dhe përqendrimit u shtuan**; net P/L i verifikuar nga ledger-i mbetet për F1 |
+| L08 | **Audit failure → BLOCKED heartbeat u testua**; monitorimi operacional i host-it mbetet fazë tjetër |
 
 ### 13.5 Testet, siguria dhe operimi (T01–T10)
 
@@ -685,7 +684,7 @@ Detajet aktuale dhe varësitë operative gjenden te
 | T03 | Teste konkurrencë, lock/lease të mbetur dhe rikuperim të kontrolluar |
 | T04 | Property/fuzz tests për `Decimal`, NaN, JSON, precision, ID dhe transaksione |
 | T05 | Coverage i matur për degët kritike |
-| T06 | CI në `main` pas merge, përveç PR/branch |
+| T06 | **Workflow i Kategorisë 6 kontrollon edhe push në `main`**; branch protection për të gjitha ndryshimet kërkon verifikim të veçantë |
 | T07 | Paketim/lock të varësive dhe audit sigurie të dependency-ve |
 | T08 | Teste të host-it final: rrjeti, ekrani, energjia, uptime, restart |
 | T09 | Backup dhe restore të provuara për `.local/` dhe cursor |
