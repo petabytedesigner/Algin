@@ -46,7 +46,7 @@ Projekti është i pavarur nga robotë ose repository të tjerë. Dokumentimi dh
 | Journal i tentativave dhe klasifikim `UNKNOWN` | Po | Teste të dështimeve dhe të komunikimit të paqartë |
 | Pajtimi i llogarisë dhe lifecycle state | Po, vetëm për lexim/ruajtje lokale | Teste offline të transaksioneve dhe rinisjes |
 | Llogaritja e R, preview i BE dhe partial | Po | Pa ndryshime reale SL dhe pa mbyllje reale |
-| CSV audit, heartbeat, raporte të kufizuara | Po | Teste të moduleve; jo zinxhir i plotë ngjarjesh operative |
+| CSV audit, heartbeat, raporte të kufizuara | Po | Replay i provave durable dhe teste offline E2E; jo ekzekutim real Practice |
 | Ekzekutimi i porosive në OANDA Practice | **I çaktivizuar** | **Asnjë provë e konfirmuar nga kjo bazë** |
 | P/L neto i plotë, backtest/replay, forward test | **Të papërfunduara** | Nuk ka evidencë performance të verifikuar |
 
@@ -404,7 +404,7 @@ Shembujt më poshtë përdorin emra konceptualë. `ACCOUNT_ID` është placehold
 | `.local/heartbeat.json` | Gjendja e fundit e procesit |
 | `csv/events.csv` | Logimi i strukturuar i vëzhgimeve |
 
-Skedarët e `.local/` janë të përjashtuar nga Git. **`csv/events.csv` nuk përputhet aktualisht me rregullin `csv/events_*.csv` të `.gitignore`**; ky është detyrim i pambyllur sigurie (L04) dhe duhet korrigjuar në një fazë të autorizuar për kod. Ky README nuk e ndryshon `.gitignore`.
+Skedarët e `.local/` janë të përjashtuar nga Git. **`csv/events.csv` është tani i përjashtuar nga Git** bashkë me lock-et përkatëse; kontrolloni sërish që loget lokale të mos shtohen manualisht në commit.
 
 ### 7.4 Procedurë e sigurt në rast dështimi
 
@@ -451,30 +451,66 @@ NZD_USD, GBP_JPY, EUR_JPY, XAU_USD, BTC_USD
 
 ### 9.1 CSV / Audit events
 
-`storage/event_log.py` ofron një skemë fikse me fushat:
+`storage/event_log.py` ruan të njëjtën skemë CSV, por tani kontrollon
+integritetin e regjistrimeve ekzistuese, ID-të unike, header-in,
+symlink, lock dhe rreshtat e ndërprerë. `emit_once` /
+`emit_many_once` mundësojnë rindërtim idempotent pas restart-it.
+Një rresht i dëmtuar bllokohet; nuk riparohet në heshtje.
 
-```text
-timestamp, event_id, correlation_id, instrument, direction,
-stage, event, outcome, reason_code, attempt_id, order_id,
-transaction_id, trade_id, detail
-```
+`AuditProjector` krijon evente nga `IntentJournal` dhe
+`LifecycleStore`: `INTENT_PREPARED`, `ORDER_UNKNOWN`,
+`ORDER_FILLED`, `PROTECTION_VERIFIED`, `BE_CONFIRMED`,
+`PARTIAL_CONFIRMED`, `TRADE_CLOSED` dhe
+`COOLDOWN_STARTED` sipas provave ekzistuese. ID-të e sinjalit,
+tentativës, porosisë dhe tregtisë përdoren vetëm kur janë të njohura;
+një event PREPARED nuk pasurohet retroaktivisht.
 
-Rezultatet e skemës përfshijnë `ATTEMPT`, `SUCCESS`, `FAILURE`, `UNKNOWN`, `BLOCKED` dhe `INFO`. Këto janë **lloje të lejuara të eventit**, jo dëshmi se runtime-i i prodhon të gjitha. Vlerat e fushave kontrollohen për të ulur rrezikun e CSV injection; regjistri nuk duhet të përmbajë token apo payload sekret.
+Për klasifikimin e `SL_HIT`, `TP_HIT` dhe
+`SYSTEM_CLOSE` (margin closeout), kërkohet GET i transaksionit
+`ORDER_FILL`, reason i dokumentuar nga OANDA, accountID dhe tradeID
+i njëjtë. Nuk sajohet `MANUAL_CLOSE` nga një mbyllje e përgjithshme
+`MARKET_ORDER_TRADE_CLOSE`. Lidhja e çdo mutacioni real dhe ID-të
+e transaksioneve BE/partial mbeten varësi të F1–F3.
 
-Në `scan_once` ekzistojnë ngjarje `SIGNAL_OBSERVED` dhe disa `ENTRY_DENIED`; lidhja e plotë me ndryshimet reale të brokerit mungon. `CSV_LOG_TRADES`, `CSV_LOG_PARTIAL`, `CSV_LOG_BE`, `CSV_LOG_SL_HIT`, `CSV_LOG_TP_HIT`, `CSV_LOG_MANUAL_CLOSE` dhe `CSV_LOG_SYSTEM_CLOSE` janë të deklaruara por nuk prodhojnë ende evente reale të këtyre veprimeve.
-
-**P58/P60 nuk janë të përfunduara plotësisht.** Duhet korrelacion i verifikuar nga `signal_id` te planifikimi, `attempt_id`, `order_id`, `transaction_id`, `trade_id` dhe mbyllja; pa loguar të dhëna sekrete.
+Flamujt CSV për lajmet, sesionet, cooldown, SL dhe TP trajtohen
+veçmas. `Strategy.last_rejection_reason` raporton arsye specifike
+(p.sh. `SIGNAL_RETEST_INVALID`), duke ruajtur ndërfaqen ekzistuese
+të vlerësimit të sinjalit.
 
 ### 9.2 Heartbeat
 
-`storage/heartbeat.py` ruan `ACTIVE`, `CYCLE_COMPLETE`, `BLOCKED`, `cycle_id` dhe timestamp në skedar atomik me checksum. Kjo është **gjendja e raportuar nga procesi**, jo monitorim i jashtëm. Nëse procesi ka vdekur, një `CYCLE_COMPLETE` i vjetër nuk do të thotë se ai është ende aktiv. Një watchdog i pavarur mbetet punë e ardhshme.
+`storage/heartbeat.py` ruan ACTIVE, CYCLE_COMPLETE dhe BLOCKED në
+skedar atomik me checksum; `read()` validon përmbajtjen dhe
+`inspect(max_age_seconds=180)` dallon STALE. Komanda:
+
+```bash
+python main.py --heartbeat-check
+```
+
+është **read-only**, pa kredenciale dhe pa OANDA GET/POST. Kthen
+kodin 0 për heartbeat të freskët ACTIVE/CYCLE_COMPLETE ose 3 për
+BLOCKED/STALE/mungesë/dëmtim. Statusi ACTIVE nuk provon vetë se
+procesi OS është gjallë: monitori i jashtëm në Termux/host mbetet
+detyrë infrastrukture P62. Dështimi i auditimit tani shënon
+BLOCKED në vend që të lërë gjendje të vjetër ACTIVE.
 
 ### 9.3 Analitika
 
-- `analytics/conservative_backtest.py` ka rregullin **stop-first**: nëse SL dhe TP preken brenda të njëjtit qiri OHLC, vendoset supozimi konservator SL. Nuk rikrijon sekuencën intrabar dhe nuk modelon të gjitha gap fills.
-- `FillCosts` ndan spread, slippage, commission dhe financing. Këto nuk mund të zbriten automatikisht dy herë kur disa janë përfshirë tashmë në çmimin/`realizedPL` e brokerit.
-- `analytics/performance.py` llogarit numrin e tregtive, net P/L të dhënë nga thirrësi, equity përfundimtar, win rate, expectancy, profit factor, maximum drawdown dhe ndarje sipas instrumentit/sesionit.
-- **Raporti nuk ka ende pipeline të verifikuar të rezultateve neto reale**, as backtest/replay të plotë. Mungojnë disa matje të planit fillestar, si seritë e humbjeve dhe përqendrimi i fitimit në pak tregti të mëdha.
+- `analytics/conservative_backtest.stop_first_bar` ruan SL-first
+  kur SL dhe TP preken në të njëjtin OHLC, jo sekuencë intrabar.
+- `net_result` kërkon deklarim **eksplicit** `gross_includes`;
+  mungesa e provës së kostove refuzohet për të parandaluar
+  double-counting.
+- `analytics/performance.report` përfshin win rate, expectancy,
+  profit factor, drawdown, seri të njëpasnjëshme fitimesh/humbjesh,
+  largest/mean win/loss, median, përqendrimin e fitimeve dhe
+  ndarjen sipas instrumentit/sesionit.
+- **P/L neto real nuk verifikohet vetëm nga funksioni analitik.**
+  Ledger-i i plotë financiar është pjesë e F1 dhe prova Practice
+  e performancës mbetet F6/F7.
+
+Detajet e implementimit, kontratat e eventeve dhe kufizimet janë
+te [CATEGORY_6_REVIEW.md](docs/CATEGORY_6_REVIEW.md).
 
 ---
 
@@ -510,22 +546,21 @@ python -m unittest discover -s tests -v
 python main.py --check
 ```
 
-### 11.2 Gjendja e testimit në integrimin e Kategorisë 6
+### 11.2 Gjendja e testimit pas plotësimit teknik të Kategorisë 6
 
-- Në PR #7, suite e dokumentuar **189/189** teste offline kaloi.
-- Gjashtë grupet e kontrolleve të kategorive 1–6 për PR-në përfundimtare kaluan.
-- `compileall` dhe `main.py --check` kaluan.
-- Pas merge u verifikua përputhja e pemës së kodit me degën e testuar.
-- Këto janë **evidenca të ekzekutimeve të mëparshme**, jo pretendim që testet u riekzekutuan sot mbi brokerin.
+- PR #7 historikisht kaloi **189/189** teste offline.
+- Për plotësimin 6A–6D, [GitHub Actions run 43787120534](https://github.com/petabytedesigner/Algin/actions/runs/43787120534) kaloi **217/217 teste** në degën e zhvillimit.
+- `compileall`, `python main.py --check` dhe testet e regresionit të kategorive të mëparshme kaluan.
+- Testet e reja mbulojnë replay të auditimit, CSV të korruptuar, heartbeat të vjetruar, refuzime, klasifikim SL/TP dhe cikël fake-broker me BE/partial/close/restart.
+- Workflow `category6.yml` tani kontrollon PR-të dhe push-et në `main`; kjo nuk i ndryshon workflow-t e kategorive të tjera.
+- Këto janë **prova offline të GitHub Actions**, jo prova të ekzekutimit real të tregtive te OANDA.
 
-Shiko [PR #7](https://github.com/petabytedesigner/Algin/pull/7) dhe [GitHub Actions — Category 6](https://github.com/petabytedesigner/Algin/actions/runs/43763792994). Workflow-t e kategorive ndodhen në `.github/workflows/`. Ato përdorin Python 3.11 dhe testet offline. Në versionin aktual të workflow-ve, verifikimi në `main` pas merge nuk është ende portë e pavarur dhe e vazhdueshme për të gjitha ndryshimet.
-
-### 11.3 Çfarë NUK mbulohet nga 189 teste
+### 11.3 Çfarë NUK mbulohet nga 217 teste
 
 - Një cikël i plotë me porosi të vërtetë në OANDA Practice.
 - Reconciliation mbi historik real me financime, komisione, stop amend, partial-close dhe restart të papritur.
 - Sjellja e plotë kur klienti humbet përgjigjen por brokeri ka pranuar urdhrin.
-- Testi i përbashkët i të gjitha moduleve në pipeline-in aktiv të hyrjes.
+- Pipeline-i i plotë aktiv nga sinjali M15, përmes ExposureBook/LossState, te ekzekutimi real; fake-broker E2E mbulon OrderEngine/lifecycle, por jo këtë lidhje të ardhshme.
 - Coverage i matur për çdo degë dhe property/fuzz testing i gjerë.
 - Termux/Android si proces i vazhdueshëm në mjedisin përfundimtar.
 - Backtest/replay, forward test, fitimshmëria neto dhe performanca live.
@@ -545,7 +580,7 @@ Pikat origjinale u ndanë në **63 pika të zhvillimit** të shpërndara në 6 k
 | **3. Broker order contract** | P19–P24, P26–P30 | Përgatitje, journal, klasifikim/reconciliation të testuar me fake transport; real writes OFF |
 | **4. Gjendja dhe lifecycle** | P31–P40 | Reconciliation dhe menaxhim lokal; BE/partial/mbyllje reale OFF; disa lidhje financiare ende mungojnë |
 | **5. Strategjia dhe të dhënat** | P41–P47, P50–P52, P54, P56 | Filtra dhe teste sintetike të integruara; performance e paverifikuar |
-| **6. Auditimi dhe testet** | P57–P61, P64–P67, P70–P71, P74 | Konstruksionet offline të integruara; **P58/P60 pjesërisht të pambyllura** |
+| **6. Auditimi dhe testet** | P57–P61, P64–P67, P70–P71, P74 | Audit idempotent, heartbeat check dhe fake-broker E2E; **P58/P60 ende me varësi operative F1–F3** |
 
 **63/63 pika të kategorive kanë pasur implementime të integruara, por kjo nuk është "63/63 përfundim operacional".** Për çdo pikë mbetet dallimi mes kodit ekzistues, testit sintetik dhe provës së vërtetë me brokerin. Punët e reja të auditimit përfshijnë edhe defekte që nuk ishin të shprehura në 75 pikat fillestare.
 
@@ -569,6 +604,16 @@ Pikat origjinale u ndanë në **63 pika të zhvillimit** të shpërndara në 6 k
 ---
 
 ## 13. Gjetjet e auditimit dhe detyrat e pambyllura
+
+**Përditësim i Kategorisë 6 (2026-11-16):** AuditProjector,
+kontrolli i CSV, heartbeat read-only, testet fake-broker E2E,
+llogaritjet me kosto të deklaruara dhe metrikat shtesë
+janë implementuar në degën e mbylljes së Kategorisë 6.
+Rreshtat historikë L/T më poshtë janë inventari i auditimit
+origjinal; **jo të gjithë mbeten të hapur në të njëjtën formë**.
+Detajet aktuale dhe varësitë operative gjenden te
+[docs/CATEGORY_6_REVIEW.md](docs/CATEGORY_6_REVIEW.md).
+
 
 **Rregulli i statusit:** tabelat më poshtë përshkruajnë gjetje nga analiza statike dhe kontratat e kodit, jo dështime të riprodhuara të gjitha në ekzekutim real. Për çdo rregullim kërkohen test pozitiv, test negativ dhe rishikim i ndikimit mbi gjendjen ekzistuese.
 
@@ -623,12 +668,12 @@ Pikat origjinale u ndanë në **63 pika të zhvillimit** të shpërndara në 6 k
 | --- | --- |
 | L01 | **P58:** lidhja e të gjitha `CSV_LOG_*` me ngjarje të verifikuara |
 | L02 | **P60:** gjurma e plotë signal → risk → request → result → trade → close |
-| L03 | Zëvendësimi i `STRATEGY_NO_SIGNAL` gjenerik me kode refuzimi specifike |
-| L04 | Përjashtimi i `csv/events.csv` nga Git dhe politika e ruajtjes së logeve |
-| L05 | Detektim i CSV të ndërprerë, rotacion/retention dhe test rikuperimi |
-| L06 | Monitor i jashtëm për heartbeat të vjetruar dhe proces të ndalur |
-| L07 | Raport me loss streak, ekspozim të rezultateve ekstreme, net P/L të verifikuar |
-| L08 | Trajtim i qëndrueshëm i dështimit të audit logging pa humbur arsyen e bllokimit |
+| L03 | **Kodet specifike të refuzimit u shtuan** në Strategy/main; klasifikimi plotësues në pipeline-in aktiv mbetet për F2 |
+| L04 | Përjashtimi i `csv/events.csv` nga Git **u zbatua**; politika afatgjatë e rotacionit/ruajtjes së logeve mbetet për host-in |
+| L05 | **Detektimi i CSV të ndërprerë u shtua** dhe refuzon riparimin automatik; rotacion/retention mbeten për host-in |
+| L06 | **Heartbeat.inspect / --heartbeat-check u shtuan**; monitori i jashtëm për host-in mbetet i pambyllur |
+| L07 | **Statistikat e streak dhe përqendrimit u shtuan**; net P/L i verifikuar nga ledger-i mbetet për F1 |
+| L08 | **Audit failure → BLOCKED heartbeat u testua**; monitorimi operacional i host-it mbetet fazë tjetër |
 
 ### 13.5 Testet, siguria dhe operimi (T01–T10)
 
@@ -639,7 +684,7 @@ Pikat origjinale u ndanë në **63 pika të zhvillimit** të shpërndara në 6 k
 | T03 | Teste konkurrencë, lock/lease të mbetur dhe rikuperim të kontrolluar |
 | T04 | Property/fuzz tests për `Decimal`, NaN, JSON, precision, ID dhe transaksione |
 | T05 | Coverage i matur për degët kritike |
-| T06 | CI në `main` pas merge, përveç PR/branch |
+| T06 | **Workflow i Kategorisë 6 kontrollon edhe push në `main`**; branch protection për të gjitha ndryshimet kërkon verifikim të veçantë |
 | T07 | Paketim/lock të varësive dhe audit sigurie të dependency-ve |
 | T08 | Teste të host-it final: rrjeti, ekrani, energjia, uptime, restart |
 | T09 | Backup dhe restore të provuara për `.local/` dhe cursor |

@@ -8,6 +8,8 @@ __pycache__/
 .local/
 *.log
 csv/events_*.csv
+csv/events.csv
+csv/*.lock
 state.json
 state_v10.json
 heartbeat_v10.txt

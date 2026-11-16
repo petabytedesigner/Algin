@@ -10,7 +10,7 @@ import logging
 import time
 from functools import lru_cache
 from uuid import uuid4
-from storage.event_log import EventLog, AuditError
+from storage.event_log import EventLog, AuditError, AuditProjector
 from storage.heartbeat import Heartbeat, HeartbeatError
 from datetime import datetime, timezone
 
@@ -113,25 +113,40 @@ def build_news_filter():
     )
 
 
-def scan_once() -> int:
+def _scan_once(cycle: str) -> int:
     """One read-only observation cycle; fail closed on broker uncertainty."""
-    cycle = uuid4().hex
     audit = EventLog(config.CSV_PATH) if config.CSV_ENABLED else None
     heartbeat = Heartbeat(config.HEARTBEAT_PATH)
     def record(event, reason, *, instrument=None, outcome="BLOCKED", stage="BLOCK", direction=None):
         if audit is None: return
-        enabled = (
-            (stage=="SIGNAL" and config.CSV_LOG_SIGNALS) or
-            (reason.startswith("NEWS_") and config.CSV_LOG_NEWS_BLOCK) or
-            (reason=="SESSION_BLOCK" and config.CSV_LOG_SESSION_BLOCK) or
-            (reason=="COOLDOWN" and config.CSV_LOG_COOLDOWN) or
-            (stage=="BLOCK" and config.CSV_LOG_SIGNALS)
-        )
+        # Specific event switches take priority over the general signals
+        # flag, preventing unintended news/session/cooldown event logging.
+        if stage == "SIGNAL":
+            enabled = config.CSV_LOG_SIGNALS
+        elif reason.startswith("NEWS_"):
+            enabled = config.CSV_LOG_NEWS_BLOCK
+        elif reason == "SESSION_BLOCK":
+            enabled = config.CSV_LOG_SESSION_BLOCK
+        elif reason == "COOLDOWN":
+            enabled = config.CSV_LOG_COOLDOWN
+        else:
+            enabled = stage == "BLOCK" and config.CSV_LOG_SIGNALS
         if enabled:
-            audit.emit(event_id=uuid4().hex,correlation_id=cycle,
-                       instrument=instrument,direction=direction,
-                       stage=stage,event=event,outcome=outcome,
-                       reason_code=reason)
+            try:
+                audit.emit(event_id=uuid4().hex,correlation_id=cycle,
+                           instrument=instrument,direction=direction,
+                           stage=stage,event=event,outcome=outcome,
+                           reason_code=reason)
+            except AuditError:
+                # Persist the precise root cause before legacy caller paths
+                # can catch the failure and return without a final heartbeat.
+                try:
+                    heartbeat.write(
+                        "BLOCKED", reason_code="AUDIT_FAILURE", cycle_id=cycle
+                    )
+                except HeartbeatError:
+                    LOG.error("Audit and heartbeat both unavailable")
+                raise
     try:
         heartbeat.write("ACTIVE",cycle_id=cycle)
     except HeartbeatError:
@@ -220,12 +235,20 @@ def scan_once() -> int:
         # Category 5 derives the true retest zone from PRE-breakout swings.
         zone_low = min(c["low"] for c in candles[:-1][-10:])
         zone_high = max(c["high"] for c in candles[:-1][-10:])
-        signals = [
-            strategy.evaluate_signal(instrument, direction, candles, fast, slow,
-                                     atr, zone_low, zone_high, now)
-            for direction in ("LONG", "SHORT")
-        ]
-        signals = [s for s in signals if s is not None]
+        signals = []
+        for direction in ("LONG", "SHORT"):
+            signal = strategy.evaluate_signal(
+                instrument, direction, candles, fast, slow,
+                atr, zone_low, zone_high, now
+            )
+            if signal is not None:
+                signals.append(signal)
+            else:
+                reason = getattr(strategy, "last_rejection_reason", None)
+                if not isinstance(reason, str) or not reason:
+                    reason = "UNSPECIFIED"
+                record("SIGNAL_REJECTED", "SIGNAL_" + reason,
+                       instrument=instrument, direction=direction)
         if not signals:
             record("ENTRY_DENIED","STRATEGY_NO_SIGNAL",instrument=instrument)
             continue
@@ -245,6 +268,61 @@ def scan_once() -> int:
     return 0
 
 
+def scan_once() -> int:
+    """Fault boundary: a failed audit/scan never leaves silent ACTIVE status."""
+    cycle = uuid4().hex
+    try:
+        outcome = _scan_once(cycle)
+        if outcome != 0:
+            # Some legacy error branches return a code before writing the
+            # final heartbeat (for example, when CSV audit itself fails).
+            # Never leave a previous ACTIVE state after such a failure.
+            hb = Heartbeat(config.HEARTBEAT_PATH)
+            current = hb.read()
+            if current["cycle_id"] != cycle or current["state"] == "ACTIVE":
+                hb.write(
+                    "BLOCKED", reason_code="SCAN_INCOMPLETE", cycle_id=cycle
+                )
+        return outcome
+    except Exception as exc:
+        # Do not log raw broker replies, authorization headers or payloads.
+        LOG.error("Signal scan blocked by %s", type(exc).__name__)
+        reason = "AUDIT_FAILURE" if isinstance(exc, AuditError) else "SCAN_ERROR"
+        try:
+            Heartbeat(config.HEARTBEAT_PATH).write(
+                "BLOCKED", reason_code=reason, cycle_id=cycle
+            )
+        except HeartbeatError:
+            LOG.error("Unable to persist BLOCKED heartbeat")
+        return 3
+
+
+def project_account_audit(reconciler, report):
+    """Read-only/idempotent projection AFTER broker reconciliation.
+
+    No event is evidence of a broker write. On blocked accounts, emit only
+    durable journal observations; never certify an inconsistent lifecycle.
+    """
+    if not config.CSV_ENABLED:
+        return ()
+    projector = AuditProjector(config.ACCOUNT_ID, EventLog(config.CSV_PATH))
+    attempts = reconciler.journal.snapshot()
+    state = None if report.blocked_reasons else reconciler.store.load()
+    lookup = None
+    if state is not None:
+        # Read-only OANDA transaction evidence; immutable transaction facts
+        # can be cached within this process to avoid one GET per old closure
+        # on every subsequent management cycle.
+        lookup = getattr(reconciler, "_audit_transaction_lookup", None)
+        if lookup is None:
+            @lru_cache(maxsize=512)
+            def lookup(transaction_id):
+                raw = reconciler._read("/transactions/" + transaction_id)
+                return raw["transaction"]
+            reconciler._audit_transaction_lookup = lookup
+    return projector.project(attempts, state, transaction_fetcher=lookup)
+
+
 def manage_once() -> int:
     """Read-only recovery before evaluating entry sessions or signals."""
     if not config.API_KEY or not config.ACCOUNT_ID:
@@ -254,7 +332,9 @@ def manage_once() -> int:
     heartbeat = Heartbeat(config.HEARTBEAT_PATH)
     try:
         heartbeat.write("ACTIVE",cycle_id=cycle)
-        report = ManagementLoop(AccountReconciler(config.ACCOUNT_ID)).run_once()
+        reconciler = AccountReconciler(config.ACCOUNT_ID)
+        report = ManagementLoop(reconciler).run_once()
+        project_account_audit(reconciler, report)
         if report.blocked_reasons:
             LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
             heartbeat.write("BLOCKED",reason_code="RECONCILIATION_BLOCKED",
@@ -264,12 +344,24 @@ def manage_once() -> int:
                  report.cursor, len(report.owned_open_trades))
         heartbeat.write("CYCLE_COMPLETE",cycle_id=cycle)
         return 0
-    except (ReconcileError, StateError, JournalError, HeartbeatError, ValueError) as exc:
+    except (ReconcileError, StateError, JournalError, HeartbeatError, AuditError, ValueError) as exc:
         LOG.error("Lifecycle reconciliation blocked: %s", exc)
         try:
             heartbeat.write("BLOCKED",reason_code="RECOVERY_ERROR",cycle_id=cycle)
         except HeartbeatError:
             pass
+        return 3
+
+
+def heartbeat_check() -> int:
+    """External/read-only watchdog probe; missing/stale/BLOCKED is nonzero."""
+    try:
+        status = Heartbeat(config.HEARTBEAT_PATH).inspect()
+        LOG.info("Heartbeat health=%s age=%ss state=%s",
+                 status["health"], status["age_seconds"], status["state"])
+        return 0 if status["health"] in ("ACTIVE", "CYCLE_COMPLETE") else 3
+    except (HeartbeatError, ValueError) as exc:
+        LOG.error("Heartbeat unavailable: %s", type(exc).__name__)
         return 3
 
 
@@ -279,6 +371,8 @@ def main(argv=None) -> int:
     parser.add_argument("--once", action="store_true", help="One legacy read-only signal scan")
     parser.add_argument("--manage-once", action="store_true",
                         help="Reconcile broker/lifecycle state without new entries")
+    parser.add_argument("--heartbeat-check", action="store_true",
+                        help="Read-only health probe for external watchdogs")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if config.ORDER_WRITES_ENABLED:
@@ -287,6 +381,8 @@ def main(argv=None) -> int:
     if args.check:
         LOG.info("Category-6 imports OK; broker writes DISABLED")
         return 0
+    if args.heartbeat_check:
+        return heartbeat_check()
     if args.manage_once:
         return manage_once()
     if args.once:
@@ -301,6 +397,7 @@ def main(argv=None) -> int:
             while True:
                 # P36: recovery before checking any entry-session constraint.
                 report = reconciler.run()
+                project_account_audit(reconciler, report)
                 if report.blocked_reasons:
                     LOG.error("Lifecycle blocked: %s", "; ".join(report.blocked_reasons))
                     return 3
@@ -308,8 +405,14 @@ def main(argv=None) -> int:
                 if result:
                     return result
                 time.sleep(60)
-    except (ReconcileError, StateError, JournalError, ValueError) as exc:
-        LOG.error("Management process stopped safely: %s", exc)
+    except Exception as exc:
+        LOG.error("Management process blocked by %s", type(exc).__name__)
+        try:
+            Heartbeat(config.HEARTBEAT_PATH).write(
+                "BLOCKED", reason_code="MANAGEMENT_ERROR"
+            )
+        except HeartbeatError:
+            LOG.error("Unable to persist BLOCKED management heartbeat")
         return 3
 
 

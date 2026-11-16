@@ -49,61 +49,70 @@ class Strategy:
         self.pattern_filters = PatternFilters()
         self.scoring = ScoringEngine(scoring_config or ScoringConfig())
 
+        # P59: reason for the last synchronous evaluation; not permission
+        # to trade. Read immediately after evaluating each direction.
+        self.last_rejection_reason = None
+
+    def _reject(self, reason):
+        self.last_rejection_reason = reason
+        return None
+
     def evaluate_signal(
         self, instrument: str, direction: str,
         candles: List[Dict[str, Any]], ema20: float, ema50: float,
         atr: float, zone_low: float, zone_high: float, timestamp: datetime,
     ) -> Optional[StrategySignal]:
         """Return a signal only when all directional and data gates pass."""
+        self.last_rejection_reason = None
         if direction not in ("LONG", "SHORT"):
-            return None
+            return self._reject("INVALID_DIRECTION")
         if not isinstance(instrument, str) or "_" not in instrument:
-            return None
+            return self._reject("INVALID_INSTRUMENT")
         if any(not isinstance(x, (int, float)) or not math.isfinite(x)
                or x <= 0 for x in (ema20, ema50, atr)):
-            return None
+            return self._reject("INVALID_INDICATORS")
         try:
             clean = validate_candles(candles, now=timestamp, min_count=50)
         except (CandleDataError, ValueError, TypeError):
-            return None
+            return self._reject("INVALID_CANDLES")
         last = clean[-1]
         trend = self.trend_engine.evaluate(
             price=last["close"], ema20=ema20, ema50=ema50, atr=atr
         )
         wanted = "UP" if direction == "LONG" else "DOWN"
         if trend.direction != wanted or trend.is_overextended or trend.in_reset_zone:
-            return None
+            return self._reject("TREND_OR_RESET")
 
         # Explicit bullish LONG / bearish SHORT candle confirmation.
         if (direction == "LONG" and last["close"] <= last["open"]) or (
             direction == "SHORT" and last["close"] >= last["open"]
         ):
-            return None
+            return self._reject("CANDLE_DIRECTION")
 
         sequence = self.breakout_retest.confirm(clean, direction, atr)
         if sequence is None or sequence.state != "CONFIRMED":
-            return None
+            return self._reject("BREAKOUT_RETEST_MISSING")
         # All structural evidence must exist *by the breakout candle*, not
         # be added retroactively by the retest/signal candle.
         structure = self.structure_engine.detect(
             clean[:sequence.breakout_index + 1]
         )
         if not structure.bos or structure.direction != wanted:
-            return None
+            return self._reject("STRUCTURE_NOT_CONFIRMED")
 
         retest = self.retest_engine.check_retest(
             last, sequence.zone_low, sequence.zone_high, direction
         )
         if not retest.is_valid:
-            return None
+            return self._reject("RETEST_INVALID")
         candle_quality = self.candle_rules.evaluate(last)
         if candle_quality.is_doji:
-            return None
+            return self._reject("DOJI_CANDLE")
         patterns = self.pattern_filters.check(
             candles=clean, atr=atr, trend_direction=trend.direction
         )
         if not patterns.is_valid:
-            return None
+            return self._reject("PATTERN_REJECTED")
         ema_score = self.ema_engine.ema_alignment(ema20, ema50)
         atr_score = self.atr_engine.normalize_for_scoring(
             atr_val=atr, price=last["close"]
@@ -123,9 +132,9 @@ class Strategy:
             score = self.scoring.score(metrics)
             grade = self.scoring.grade_from_score(score)
         except ValueError:
-            return None
+            return self._reject("SCORING_INVALID")
         if score < self.scoring.config.grade_c_min:
-            return None
+            return self._reject("SCORE_BELOW_THRESHOLD")
         reason = ["CHoCH" if structure.choch else "BOS",
                   "Breakout->Retest", f"Trend {trend.direction}"]
         if patterns.quality < 1:

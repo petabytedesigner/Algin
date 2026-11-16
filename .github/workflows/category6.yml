@@ -1,7 +1,7 @@
 name: Category 6 observability and simulation verification
 on:
   push:
-    branches: [development/category-6-observability-tests-2026-11-15]
+    branches: [main, development/category-6-completion-audit-e2e-2026-11-16]
   pull_request:
     branches: [main]
 permissions:

@@ -45,19 +45,28 @@ def stop_first_bar(direction, *,low,high,stop,target):
         if lo<=tp: return "TP"
     return "OPEN"
 
-def net_result(*,gross_pl, costs:FillCosts, gross_includes=()):
-    """Subtract only costs NOT already reflected in broker gross P/L.
+def net_result(*, gross_pl, costs: FillCosts, gross_includes=None):
+    """Compute net P/L only from explicitly attested cost inclusion.
 
-    OANDA realizedPL may already include spread via actual execution prices.
-    Caller must attest inclusion; otherwise this model must not guess.
+    Do NOT apply this to an OANDA realizedPL value by guessing which costs
+    are already included. In particular, spread may already be reflected in
+    the execution prices. Missing cost provenance must block calculations.
     """
-    if not isinstance(costs,FillCosts): raise BacktestError("Costs required")
-    allowed={"spread","slippage","commission","financing"}
-    items=tuple(gross_includes)
-    included=set(items)
-    if len(included)!=len(items) or not included<=allowed:
-        raise BacktestError("Unknown/duplicate cost inclusion")
-    gross=dec(gross_pl,"gross_pl")
+    if not isinstance(costs, FillCosts):
+        raise BacktestError("Explicit cost breakdown required")
+    if gross_includes is None or isinstance(gross_includes, str):
+        raise BacktestError("Gross cost inclusions must be explicitly attested")
+    try:
+        included = tuple(gross_includes)
+        included_set = set(included)
+    except (TypeError, ValueError) as exc:
+        raise BacktestError("Invalid gross inclusion attestation") from exc
+    allowed = {"spread", "slippage", "commission", "financing"}
+    if len(included) != len(included_set) or not included_set <= allowed:
+        raise BacktestError("Unknown or duplicated included cost")
+    gross = dec(gross_pl, "gross_pl")
     costs.total()
-    return gross-sum((dec(getattr(costs,k),k) for k in allowed-included),
-                     Decimal("0"))
+    return gross - sum(
+        (dec(getattr(costs, key), key) for key in allowed - included_set),
+        Decimal("0")
+    )
