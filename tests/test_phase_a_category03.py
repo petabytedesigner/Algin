@@ -245,7 +245,8 @@ class FinancialReconcileTests(unittest.TestCase):
     def test_full_broker_transaction_persists_with_cursor_exactly_once(self):
         self.tick({
             "id": "101", "accountID": "acct-1", "type": "DAILY_FINANCING",
-            "financing": "-0.5", "positionFinancings": [],
+            "financing": "-0.5",
+            # Account amount is verifiable, but trade attribution is unknown.
         })
         with self.reconciler:
             first = self.reconciler.run()
