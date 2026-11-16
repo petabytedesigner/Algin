@@ -330,6 +330,40 @@ class VerifiedLossFixture(LifecycleFixture):
                 self.assertFalse(result.losses.verified)
                 self.assertFalse(result.inputs_verified)
 
+    def test_reconciler_blocker_never_exposes_verified_planner_inputs(self):
+        report = ReconcileReport(
+            cursor="102", owned_open_trades=(),
+            blocked_reasons=("UNRESOLVED_BROKER_ORDER",),
+            new_closed_trade_ids=()
+        )
+        snapshot = build_risk_readiness(
+            account(cursor="102", nav="9950"), self.store.load(),
+            self.journal.snapshot(), broker_trades=(), broker_orders=(),
+            report=report, now=NOW, anchor=evidence()
+        )
+        self.assertFalse(snapshot.exposure.verified)
+        self.assertFalse(snapshot.losses.verified)
+        self.assertFalse(snapshot.inputs_verified)
+        self.assertIn(
+            "BROKER_RECONCILIATION_NOT_COMPLETE", snapshot.blocked_reasons
+        )
+
+    def test_mismatched_reconciler_owned_inventory_is_fail_closed(self):
+        report = ReconcileReport(
+            cursor="102", owned_open_trades=("99",),
+            blocked_reasons=(), new_closed_trade_ids=()
+        )
+        snapshot = build_risk_readiness(
+            account(cursor="102", nav="9950"), self.store.load(),
+            self.journal.snapshot(), broker_trades=(), broker_orders=(),
+            report=report, now=NOW, anchor=evidence()
+        )
+        self.assertFalse(snapshot.exposure.verified)
+        self.assertFalse(snapshot.losses.verified)
+        self.assertIn(
+            "OWNED_BROKER_TRADE_REPORT_MISMATCH", snapshot.blocked_reasons
+        )
+
     def test_missing_financial_fee_refuses_verified_losses(self):
         def corrupt(state):
             event = state["financial_ledger"]["events"]["101"]
