@@ -13,6 +13,7 @@ from broker.account_reconciler import AccountReconciler, ReconcileError
 from risk.trade_lifecycle import LifecycleError, TradeRecord
 from risk.trade_plan import InstrumentRules
 from storage.lifecycle_state import StateError
+from utils.time_tools import iso_utc, utc_now
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,44 @@ class TradeManagement:
                 "broker_write_attempted": False}
 
 
+    def stage_close(self, trade_id, *, source="SYSTEM"):
+        """Durably reserve one full trade-close command, without broker I/O.
+
+        Only a clean, owned trade under the account lease can be staged.
+        Source is an operator's intent label, never a claim about execution
+        origin. SL/TP can still close the trade independently at the broker.
+        """
+        if source not in ("SYSTEM", "MANUAL"):
+            raise LifecycleError("Invalid close source")
+        record = self._trusted_trade(trade_id)
+        if (record.closed or record.be_state in ("INTENT", "UNKNOWN")
+            or any(x["state"] in ("INTENT", "UNKNOWN")
+                   for x in record.partial_phases.values())):
+            raise LifecycleError("Trade or management operation unresolved")
+        cursor = self.reconciler.store.load()["cursor"]
+
+        def mutate(state):
+            current = TradeRecord.from_dict(state["trades"].get(trade_id))
+            if current != record or state["cursor"] != cursor:
+                raise LifecycleError("Trade changed before durable close reservation")
+            intents = state.setdefault("close_intents", {})
+            if trade_id in intents:
+                raise LifecycleError("Close already staged; no duplicate action")
+            intents[trade_id] = {
+                "trade_id": trade_id, "attempt_id": current.attempt_id,
+                "status": "INTENT", "source": source,
+                "units": str(abs(current.current_units)),
+                "cursor_before": cursor,
+                "created_at": iso_utc(utc_now()),
+                "confirmed_transaction_id": None,
+            }
+        self.reconciler.store.mutate(mutate, expected_cursor=cursor)
+        return {
+            "trade_id": trade_id, "source": source,
+            "units": "ALL", "status": "INTENT",
+            "broker_write_attempted": False,
+        }
+
     def mark_unknown(self, trade_id, *, operation, phase=None):
         """Persist ambiguous BE/partial outcome without automatic re-submission.
 
@@ -123,11 +162,19 @@ class TradeManagement:
         """
         if not self.reconciler._active:
             raise ReconcileError("Process-wide account lease required")
-        if operation not in ("BE", "PARTIAL"):
+        if operation not in ("BE", "PARTIAL", "CLOSE"):
             raise LifecycleError("Unknown management operation")
         def mutate(state):
             if trade_id not in state["trades"]:
                 raise LifecycleError("Unknown trade")
+            if operation == "CLOSE":
+                entry = state.get("close_intents", {}).get(trade_id)
+                if not isinstance(entry, dict) or entry["status"] != "INTENT":
+                    raise LifecycleError("No outstanding close intent")
+                state["close_intents"][trade_id] = dict(
+                    entry, status="UNKNOWN"
+                )
+                return
             trade = TradeRecord.from_dict(state["trades"][trade_id])
             if operation == "BE":
                 if trade.be_state != "INTENT":
