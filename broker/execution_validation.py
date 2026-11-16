@@ -11,6 +11,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR
 from typing import Any
 
 from risk.trade_plan import InstrumentRules, QuoteConversions, TradePlan, number
+from broker.oanda_v20_contract import price_tradeable
 from utils.time_tools import parse_utc, require_utc
 
 
@@ -38,11 +39,8 @@ class PreparedOrder:
 
 
 def _valid_status(price: dict) -> bool:
-    # OANDA REST v20 uses Price.status = "tradeable", not a boolean flag.
-    if "status" in price:
-        return price["status"] == "tradeable" and price.get("tradeable", True) is not False
-    # Backward compatibility for synthetic legacy response fixtures only.
-    return price.get("tradeable") is True
+    # Current v20 uses Price.tradeable; Price.status is deprecated.
+    return price_tradeable(price)
 
 
 def parse_market_quote(

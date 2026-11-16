@@ -7,11 +7,13 @@ authorization before any configured real Practice submission is permitted.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Optional
 
 import requests
 
 import config
+from broker.oanda_v20_contract import account_id
 
 
 PRACTICE_API = "https://api-fxpractice.oanda.com/v3"
@@ -44,8 +46,10 @@ class PracticeTransport:
     def _base(self):
         if config.OANDA_URL != PRACTICE_API:
             raise BrokerWriteDisabled("Only OANDA Practice endpoint is supported")
-        if not config.ACCOUNT_ID or not config.API_KEY:
-            raise BrokerCommunicationError("Practice account credentials missing")
+        if not config.API_KEY or not account_id(config.ACCOUNT_ID):
+            raise BrokerCommunicationError(
+                "Practice credentials or account identifier invalid"
+            )
         return f"{PRACTICE_API}/accounts/{config.ACCOUNT_ID}"
 
     def _headers(self):
@@ -60,8 +64,12 @@ class PracticeTransport:
                 or not _PRACTICE_WRITES_RELEASED
                 or config.ORDER_WRITES_ENABLED is not True):
                 raise BrokerWriteDisabled("Mutating broker HTTP is not released")
-        if (not isinstance(path, str) or (path != "" and not path.startswith("/"))
-            or ".." in path or "://" in path):
+        # Never allow query strings, fragments, escapes, backslashes, empty
+        # path segments or traversal inside a caller-supplied API path.
+        # Query parameters must be supplied through the params argument.
+        if (not isinstance(path, str)
+            or re.fullmatch(r"(?:/[A-Za-z0-9_.@-]+)*", path, re.ASCII) is None
+            or ".." in path):
             raise BrokerCommunicationError("Invalid account API path")
         url = self._base() + path
         try:

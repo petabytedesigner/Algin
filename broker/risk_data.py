@@ -15,6 +15,7 @@ from risk.trade_plan import (
     AccountFunds, InstrumentRules, PlanRejected, QuoteConversions, number,
 )
 from utils.common import safe_request
+from broker.oanda_v20_contract import price_tradeable
 from utils.time_tools import parse_utc
 
 
@@ -149,12 +150,7 @@ def get_quote_conversions(instrument: str, account_currency: str) -> QuoteConver
         prices = [p for p in raw_prices if (
             isinstance(p, dict) and p.get("instrument") == instrument
         )]
-        if len(prices) != 1 or not (
-            (prices[0].get("status") == "tradeable"
-             and prices[0].get("tradeable", True) is not False)
-            if "status" in prices[0]
-            else prices[0].get("tradeable") is True
-        ):
+        if len(prices) != 1 or not price_tradeable(prices[0]):
             raise PlanRejected("Price missing, ambiguous or not tradeable")
         quote = prices[0]
         base, home_quote = instrument.split("_", 1)

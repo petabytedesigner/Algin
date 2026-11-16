@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from broker.practice_transport import BrokerReply, PracticeTransport
+from broker.oanda_v20_contract import OandaContractError, validate_sinceid_batch
 from broker.financial_ledger import (
     FinancialEvidenceError, initial_ledger, record_transaction
 )
@@ -307,11 +308,16 @@ class AccountReconciler:
         new_closures = []
         if cursor != persisted["cursor"]:
             payload = self._read("/transactions/sinceid", {"id": persisted["cursor"]})
-            txs = payload.get("transactions")
-            if (payload.get("lastTransactionID") != cursor
-                or not isinstance(txs, list) or not txs
-                or txs[-1].get("id") != cursor):
-                raise ReconcileError("Incomplete transaction range or concurrent broker changes")
+            try:
+                txs = validate_sinceid_batch(
+                    payload, account=self.account_id,
+                    previous_cursor=persisted["cursor"],
+                    target_cursor=cursor,
+                )
+            except OandaContractError as exc:
+                raise ReconcileError(
+                    "Incomplete or conflicting OANDA sinceid response"
+                ) from exc
             try:
                 new_closures = self._apply_transactions(proposed, txs, cursor)
             except ReconcileError:
