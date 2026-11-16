@@ -392,6 +392,44 @@ class ManagementActionTests(OfflineManagementFixture):
         self.assertEqual(blocked.status, "BLOCKED")
         self.assertEqual(self.store.load()["close_intents"], {})
 
+    def test_foreign_trade_appearing_after_stage_blocks_synthetic_send(self):
+        self.bootstrap()
+        with self.service:
+            self.manager.stage_close("11")
+            state = self.store.load()
+            command = build_command(
+                TradeRecord.from_dict(state["trades"]["11"]), "CLOSE",
+                close_intent=state["close_intents"]["11"],
+            )
+            foreign = dict(self.transport.trades[0])
+            foreign["id"] = "12"
+            foreign["clientExtensions"] = {
+                "id": "other-operator", "tag": "foreign"
+            }
+            self.transport.trades.append(foreign)
+            result = self.engine._operate(command, self.transport)
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(self.transport.simulated_writes, 0)
+        self.assertEqual(self.store.load()["close_intents"]["11"]["status"],
+                         "UNKNOWN")
+        self.assertFalse(self.store.load()["trades"]["11"]["closed"])
+
+    def test_changed_protection_after_stage_blocks_synthetic_send(self):
+        self.bootstrap()
+        with self.service:
+            self.manager.stage_close("11")
+            state = self.store.load()
+            command = build_command(
+                TradeRecord.from_dict(state["trades"]["11"]), "CLOSE",
+                close_intent=state["close_intents"]["11"],
+            )
+            self.transport.trades[0]["takeProfitOrder"]["price"] = "1.1050"
+            result = self.engine._operate(command, self.transport)
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(self.transport.simulated_writes, 0)
+        self.assertEqual(self.store.load()["close_intents"]["11"]["status"],
+                         "UNKNOWN")
+
     def test_crash_before_reconcile_replays_confirmed_partial_after_restart(self):
         self.bootstrap()
         with self.service:
