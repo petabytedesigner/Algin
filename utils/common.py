@@ -41,7 +41,10 @@ def safe_request(
         raise ValueError("GET retries must be a positive integer")
     for attempt in range(retries):
         try:
-            return requests.get(url, headers=headers, params=params, timeout=timeout)
+            return requests.get(
+                url, headers=headers, params=params, timeout=timeout,
+                allow_redirects=False,
+            )
         except requests.RequestException:
             LOG.warning("GET failed (attempt %s/%s)", attempt + 1, retries)
             if attempt + 1 < retries:
