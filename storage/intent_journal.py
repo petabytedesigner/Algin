@@ -181,7 +181,8 @@ class IntentJournal:
 
     def begin(
         self, *, signal_id: str, attempt_id: str,
-        request: dict, risk_pct: str, margin_home: str, grade=None
+        request: dict, risk_pct: str, margin_home: str, grade=None,
+        lifecycle_store=None
     ) -> dict:
         _identity(signal_id, "signal ID")
         _identity(attempt_id, "attempt ID")
@@ -202,6 +203,38 @@ class IntentJournal:
                 ) for x in existing.values()
             ):
                 raise JournalError("Unresolved/filled trade in account journal")
+            retired = [
+                x for x in existing.values()
+                if x["status"] == "FILLED" and x.get("retired") is True
+            ]
+            if retired:
+                # Journal alone is not authority to release a historical fill.
+                # Require a separate, current, checksummed lifecycle snapshot.
+                from storage.lifecycle_state import LifecycleStore
+                from risk.trade_lifecycle import TradeRecord
+                if (not isinstance(lifecycle_store, LifecycleStore)
+                    or lifecycle_store.account_id != self.account_id
+                    or lifecycle_store.environment != "practice"):
+                    raise JournalError("Retired journal requires verified lifecycle")
+                state = lifecycle_store.load()
+                if state is None:
+                    raise JournalError("Lifecycle proof unavailable")
+                for past in retired:
+                    trade_id = past.get("trade_id")
+                    saved = state["trades"].get(trade_id)
+                    result = state["closed_results"].get(trade_id)
+                    if not isinstance(saved, dict) or not isinstance(result, dict):
+                        raise JournalError("Retired trade has no durable closure")
+                    record = TradeRecord.from_dict(saved)
+                    tx = result["transaction_id"]
+                    if (record.trade_id != trade_id
+                        or record.attempt_id != past["attempt_id"]
+                        or not record.closed or not record.result_counted
+                        or past.get("closure_transaction_id") != tx
+                        or tx not in record.close_transaction_ids
+                        or tx not in state["counted_closures"]
+                        or tx not in state["processed_transactions"]):
+                        raise JournalError("Retired trade closure proof changed")
             now = iso_utc(utc_now())
             entry = {
                 "signal_id": signal_id, "attempt_id": attempt_id,
