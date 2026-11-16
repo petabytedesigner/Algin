@@ -190,6 +190,29 @@ class V20FillTests(unittest.TestCase):
             self.assertEqual(fake.posts, 1)
             self.assertEqual(journal.get(result.attempt_id)["status"], "FILLED")
 
+    def test_live_trade_price_disagreement_cannot_certify_protection(self):
+        class DivergentTradePrice(FakeTransport):
+            def read(self, path, *, params=None):
+                result = super().read(path, params=params)
+                if path.startswith("/trades/") and result.status_code == 200:
+                    data = dict(result.body["trade"])
+                    data["price"] = "1.2050"
+                    return BrokerReply(200, {"trade": data})
+                return result
+
+        fake = DivergentTradePrice()
+        plan, rules, conv = inputs()
+        with TemporaryDirectory() as root:
+            journal = IntentJournal("acct-1", directory=root)
+            engine = OrderEngine("acct-1", transport=fake, journal=journal)
+            result = engine.submit(
+                plan, rules, conv, signal_id="mismatched-live-price", now=NOW
+            )
+            self.assertEqual(result.outcome, Outcome.FILLED)
+            self.assertFalse(result.protection_verified)
+            self.assertEqual(fake.posts, 1)
+            self.assertFalse(journal.get(result.attempt_id)["protection_verified"])
+
     def test_unknown_modern_fill_is_never_rerouted_to_second_post(self):
         class NoExactPrice(FakeTransport):
             def fill(self, *args, **kwargs):
