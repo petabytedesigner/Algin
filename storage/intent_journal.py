@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 from typing import Any, Optional
 
-from utils.time_tools import iso_utc, utc_now
+from utils.time_tools import iso_utc, parse_utc, utc_now
 
 
 class JournalError(RuntimeError):
@@ -30,6 +32,20 @@ def _identity(value: str, field: str) -> str:
     if not isinstance(value, str) or not _SAFE_ID.fullmatch(value):
         raise JournalError(f"Invalid {field}")
     return value
+
+
+def _request_digest(request: dict) -> str:
+    """Hash the exact, finite JSON request shape durably stored before POST."""
+    if not isinstance(request, dict) or not isinstance(request.get("order"), dict):
+        raise JournalError("Missing or invalid order request")
+    try:
+        data = json.dumps(
+            request, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise JournalError("Non-JSON or non-finite order request") from exc
+    return hashlib.sha256(data).hexdigest()
 
 
 class IntentJournal:
@@ -50,39 +66,65 @@ class IntentJournal:
             raise JournalError("Journal already locked; manual recovery required") from exc
         except OSError as exc:
             raise JournalError("Unable to acquire durable journal lock") from exc
+        owner = secrets.token_hex(24)
+        # If durability fails before yield, the created lock is retained
+        # as a blocker requiring operator inspection.
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(f"pid={os.getpid()} account={self.account_id} owner={owner}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(f"pid={os.getpid()} account={self.account_id}\n")
-                handle.flush()
-                os.fsync(handle.fileno())
             yield
         finally:
-            # If the process crashes, the lock remains and blocks all writes.
+            # Only the lock we created may be removed. A replacement lock
+            # is never treated as our own (including a symlink).
             try:
+                if (self.lock_path.is_symlink()
+                    or not self.lock_path.read_text(encoding="ascii").strip().endswith(
+                        " owner=" + owner
+                    )):
+                    raise JournalError("Journal lock owner changed; manual recovery required")
                 self.lock_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                raise JournalError("Cannot safely release journal lock") from exc
 
     def _load(self) -> dict:
+        # A dangling symlink has exists() == False. Check it FIRST.
+        if self.path.is_symlink():
+            raise JournalError("Refusing symlink journal")
         if not self.path.exists():
             return {"version": 1, "account_id": self.account_id, "attempts": {}}
         try:
-            if self.path.is_symlink():
-                raise JournalError("Refusing symlink journal")
             with self.path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
             if (not isinstance(data, dict) or data.get("version") != 1
                 or data.get("account_id") != self.account_id
                 or not isinstance(data.get("attempts"), dict)):
                 raise JournalError("Invalid or different-account journal")
+            signals = set()
             for key, attempt in data["attempts"].items():
                 _identity(key, "attempt ID")
                 if (not isinstance(attempt, dict)
                     or attempt.get("attempt_id") != key
-                    or attempt.get("status") not in _STATES
-                    or not isinstance(attempt.get("signal_id"), str)
-                    or not isinstance(attempt.get("request_hash"), str)):
+                    or attempt.get("status") not in _STATES):
                     raise JournalError("Malformed journal attempt")
+                signal = _identity(attempt.get("signal_id"), "signal ID")
+                if signal in signals:
+                    raise JournalError("Duplicate durable signal")
+                signals.add(signal)
+                digest = attempt.get("request_hash")
+                if (not isinstance(digest, str) or len(digest) != 64
+                    or not hmac.compare_digest(
+                        digest, _request_digest(attempt.get("request"))
+                    )):
+                    raise JournalError("Durable order request hash mismatch")
+                for key_time in ("created_at", "updated_at"):
+                    if not isinstance(attempt.get(key_time), str):
+                        raise JournalError("Missing journal timestamp")
+                if parse_utc(attempt["updated_at"]) < parse_utc(attempt["created_at"]):
+                    raise JournalError("Journal timestamps regressed")
+                if type(attempt.get("protection_verified")) is not bool:
+                    raise JournalError("Invalid journal protection marker")
             return data
         except JournalError:
             raise
@@ -91,7 +133,6 @@ class IntentJournal:
 
     def _store(self, data: dict):
         # Same-filesystem replacement; fsync file and containing directory.
-        import secrets
         temp = self.path.with_name(self.path.name + "." + secrets.token_hex(8) + ".tmp")
         fd = None
         try:
@@ -101,6 +142,8 @@ class IntentJournal:
                 json.dump(data, handle, sort_keys=True, separators=(",", ":"), allow_nan=False)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if self.path.is_symlink():
+                raise JournalError("Refusing symlink journal replacement")
             os.replace(temp, self.path)
             if hasattr(os, "O_DIRECTORY"):
                 directory_fd = os.open(str(self.path.parent), os.O_RDONLY | os.O_DIRECTORY)
@@ -131,11 +174,7 @@ class IntentJournal:
         _identity(attempt_id, "attempt ID")
         if grade is not None and grade not in ("A", "B"):
             raise JournalError("Invalid trade grade")
-        if not isinstance(request, dict) or "order" not in request:
-            raise JournalError("Missing order request")
-        digest = hashlib.sha256(
-            json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        digest = _request_digest(request)
         with self._locked():
             data = self._load()
             existing = data["attempts"]

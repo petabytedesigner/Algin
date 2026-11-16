@@ -51,6 +51,8 @@ def _durable_replace(path: Path, blob: bytes):
             handle.write(blob)
             handle.flush()
             os.fsync(handle.fileno())
+        if path.is_symlink():
+            raise StateError("Refusing symlink lifecycle replacement")
         os.replace(temp, path)
         if hasattr(os, "O_DIRECTORY"):
             fd_dir = os.open(str(path.parent), os.O_RDONLY | os.O_DIRECTORY)
@@ -135,18 +137,24 @@ class LifecycleStore:
             fd = os.open(str(self.lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
             raise StateError("Concurrent lifecycle writer or orphaned lock") from exc
+        owner = secrets.token_hex(24)
+        # A write failure after creating the lock deliberately leaves an
+        # orphan: it must never be treated as a completed acquisition.
         with os.fdopen(fd, "w", encoding="ascii") as f:
-            f.write(str(os.getpid()))
+            f.write(owner + "\n")
             f.flush()
             os.fsync(f.fileno())
         try:
             yield
         finally:
-            # Never silently remove an unknown lock after a process crash.
+            # Never unlink a replacement lock belonging to another writer.
             try:
+                if (self.lock_path.is_symlink()
+                    or self.lock_path.read_text(encoding="ascii").strip() != owner):
+                    raise StateError("Lifecycle lock owner changed; manual recovery required")
                 self.lock_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                raise StateError("Cannot safely release lifecycle lock") from exc
 
     def _validate(self, data):
         if not isinstance(data, dict) or set(data) != {
@@ -172,6 +180,16 @@ class LifecycleStore:
                 isinstance(x, str) and _TRADE.fullmatch(x) for x in values
             ):
                 raise StateError("Invalid or duplicated transaction IDs")
+            # Transaction IDs are monotonic (not necessarily consecutive).
+            # A snapshot must never claim evidence newer than its cursor.
+            numeric = [int(x) for x in values]
+            if (any(a >= b for a, b in zip(numeric, numeric[1:]))
+                or any(x > int(data["cursor"]) for x in numeric)):
+                raise StateError("Transaction history/cursor disagreement")
+        if not set(data["counted_closures"]).issubset(
+            data["processed_transactions"]
+        ):
+            raise StateError("Counted closure has no processed transaction")
         if not isinstance(data["closed_results"], dict) or not isinstance(data["cooldowns"], dict):
             raise StateError("Invalid outcome/cooldown history")
         for trade_id, outcome in data["closed_results"].items():
@@ -213,10 +231,11 @@ class LifecycleStore:
         return data
 
     def load(self):
-        if not self.path.exists():
-            return None
+        # A broken symlink looks absent to exists(), but must block recovery.
         if self.path.is_symlink():
             raise StateError("Symlink lifecycle file forbidden")
+        if not self.path.exists():
+            return None
         try:
             envelope = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(envelope, dict) or set(envelope) != {"data", "sha256"}:
