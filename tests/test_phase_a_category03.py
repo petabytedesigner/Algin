@@ -193,6 +193,30 @@ class FinancialLedgerTests(unittest.TestCase):
                     self.record(tx)
         self.assertEqual(self.ledger["events"], {})
 
+    def test_mismatched_aggregated_execution_fee_or_spread_rejected(self):
+        tx = fill(
+            101, closed=[effect("11", "1", fee="0")],
+            pl="1", fee="0.5",
+        )
+        with self.assertRaises(FinancialEvidenceError):
+            self.record(tx)
+        self.assertFalse(self.ledger["events"])
+        tx = fill(
+            102, closed=[{
+                **effect("11", "1"), "halfSpreadCost": "0.4",
+            }], pl="1", spread="0.3",
+        )
+        with self.assertRaises(FinancialEvidenceError):
+            self.record(tx)
+        self.assertFalse(self.ledger["events"])
+
+    def test_extreme_amount_is_not_accepted_as_broker_money(self):
+        tx = fill(101)
+        tx["pl"] = "1e9999999"
+        with self.assertRaises(FinancialEvidenceError):
+            self.record(tx)
+        self.assertFalse(self.ledger["events"])
+
     def test_duplicate_transaction_or_backdated_baseline_refused(self):
         self.record(fill(101))
         with self.assertRaises(FinancialEvidenceError):
