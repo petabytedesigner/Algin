@@ -139,6 +139,24 @@ class FinancialLedgerTests(unittest.TestCase):
         self.assertIsNone(summary(self.ledger)["net_pl_home_since_cursor"])
         self.assertEqual(summary(self.ledger)["unverified_transaction_ids"], ("101",))
 
+    def test_unknown_future_type_blocks_trade_net_even_after_close(self):
+        self.record(fill(101, opened="11"))
+        self.record({"id": "102", "type": "NEW_FINANCIAL_ADJUSTMENT"})
+        self.record(fill(103, closed=[effect("11", "10")], pl="10"))
+        self.assertIsNone(trade_summary(self.ledger, "11")["net_pl_home"])
+        self.assertIn(
+            "102", trade_summary(self.ledger, "11")["unverified_transaction_ids"]
+        )
+
+    def test_missing_financing_allocation_blocks_trade_only(self):
+        self.record(fill(101, opened="11"))
+        self.record({
+            "id": "102", "type": "DAILY_FINANCING", "financing": "-1"
+        })
+        self.record(fill(103, closed=[effect("11", "10")], pl="10"))
+        self.assertEqual(summary(self.ledger)["net_pl_home_since_cursor"], "9")
+        self.assertFalse(trade_summary(self.ledger, "11")["complete"])
+
     def test_aggregate_trade_pl_mismatch_fails_closed_without_new_event(self):
         with self.assertRaises(FinancialEvidenceError):
             self.record(fill(
