@@ -261,7 +261,18 @@ def scan_once() -> int:
     """Fault boundary: a failed audit/scan never leaves silent ACTIVE status."""
     cycle = uuid4().hex
     try:
-        return _scan_once(cycle)
+        outcome = _scan_once(cycle)
+        if outcome != 0:
+            # Some legacy error branches return a code before writing the
+            # final heartbeat (for example, when CSV audit itself fails).
+            # Never leave a previous ACTIVE state after such a failure.
+            hb = Heartbeat(config.HEARTBEAT_PATH)
+            current = hb.read()
+            if current["cycle_id"] != cycle or current["state"] == "ACTIVE":
+                hb.write(
+                    "BLOCKED", reason_code="SCAN_INCOMPLETE", cycle_id=cycle
+                )
+        return outcome
     except Exception as exc:
         # Do not log raw broker replies, authorization headers or payloads.
         LOG.error("Signal scan blocked by %s", type(exc).__name__)
@@ -286,7 +297,19 @@ def project_account_audit(reconciler, report):
     projector = AuditProjector(config.ACCOUNT_ID, EventLog(config.CSV_PATH))
     attempts = reconciler.journal.snapshot()
     state = None if report.blocked_reasons else reconciler.store.load()
-    return projector.project(attempts, state)
+    lookup = None
+    if state is not None:
+        # Read-only OANDA transaction evidence; immutable transaction facts
+        # can be cached within this process to avoid one GET per old closure
+        # on every subsequent management cycle.
+        lookup = getattr(reconciler, "_audit_transaction_lookup", None)
+        if lookup is None:
+            @lru_cache(maxsize=512)
+            def lookup(transaction_id):
+                raw = reconciler._read("/transactions/" + transaction_id)
+                return raw["transaction"]
+            reconciler._audit_transaction_lookup = lookup
+    return projector.project(attempts, state, transaction_fetcher=lookup)
 
 
 def manage_once() -> int:

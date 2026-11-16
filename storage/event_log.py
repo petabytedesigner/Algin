@@ -239,7 +239,7 @@ class AuditProjector:
         }
         return bool(getattr(self.config, mapping[kind], False))
 
-    def project(self, attempts, state=None):
+    def project(self, attempts, state=None, *, transaction_fetcher=None):
         if not isinstance(attempts, (list, tuple)):
             raise AuditError("Journal snapshot must be a sequence")
         if state is not None and (
@@ -349,8 +349,6 @@ class AuditProjector:
                             "detail": _field(phase, "partial phase", required=True)
                         })
             for trade_id, close in sorted(state["closed_results"].items()):
-                if not self._enabled("CLOSE"):
-                    continue
                 if trade_id not in state["trades"]:
                     raise AuditError("Orphan closed result")
                 from risk.trade_lifecycle import TradeRecord
@@ -366,17 +364,72 @@ class AuditProjector:
                 except (ValueError, TypeError, KeyError) as exc:
                     raise AuditError("Unverifiable close result") from exc
                 tx = _ident(close.get("transaction_id"), "transaction_id")
-                events.append({
-                    "event_id": _identity_id(self.account_id, trade_id, "CLOSED", tx),
-                    "correlation_id": signal,
-                    "instrument": instrument, "direction": direction,
-                    "stage": "CLOSE", "event": "TRADE_CLOSED",
-                    "outcome": "SUCCESS", "reason_code": "BROKER_CLOSE_RECONCILED",
-                    "attempt_id": rec.attempt_id,
-                    "order_id": entry.get("order_id"), "trade_id": trade_id,
-                    "transaction_id": tx,
-                    "timestamp": _parse_time(close.get("closed_at"))
-                })
+                # Optional additional independent GET proof of WHY a trade
+                # closed. A generic close alone does not prove SL/TP or manual
+                # versus bot-initiated close.
+                if transaction_fetcher is not None and any((
+                    getattr(self.config, "CSV_LOG_SL_HIT", False),
+                    getattr(self.config, "CSV_LOG_TP_HIT", False),
+                    getattr(self.config, "CSV_LOG_SYSTEM_CLOSE", False)
+                )):
+                    if not callable(transaction_fetcher):
+                        raise AuditError("Transaction evidence fetcher must be callable")
+                    try:
+                        evidence = transaction_fetcher(tx)
+                    except Exception as exc:
+                        raise AuditError("Closing transaction GET unavailable") from exc
+                    if not isinstance(evidence, dict) or (
+                        evidence.get("id") != tx
+                        or evidence.get("accountID") != self.account_id
+                        or evidence.get("type") != "ORDER_FILL"
+                        or not isinstance(evidence.get("tradesClosed"), list)
+                        or not any(
+                            isinstance(effect, dict)
+                            and effect.get("tradeID") == trade_id
+                            for effect in evidence["tradesClosed"]
+                        )
+                    ):
+                        raise AuditError("Close reason cannot be attributed to trade")
+                    reason = _ident(evidence.get("reason"), "order fill reason")
+                    kind = {
+                        "STOP_LOSS_ORDER": ("SL_HIT", "CSV_LOG_SL_HIT"),
+                        "GUARANTEED_STOP_LOSS_ORDER": ("SL_HIT", "CSV_LOG_SL_HIT"),
+                        "TRAILING_STOP_LOSS_ORDER": ("SL_HIT", "CSV_LOG_SL_HIT"),
+                        "TAKE_PROFIT_ORDER": ("TP_HIT", "CSV_LOG_TP_HIT"),
+                        "MARKET_ORDER_MARGIN_CLOSEOUT": (
+                            "SYSTEM_CLOSE", "CSV_LOG_SYSTEM_CLOSE"
+                        ),
+                    }.get(reason)
+                    if kind is not None and getattr(self.config, kind[1], False):
+                        events.append({
+                            "event_id": _identity_id(
+                                self.account_id, trade_id, "CLOSE_CAUSE", tx
+                            ),
+                            "correlation_id": signal,
+                            "instrument": instrument,
+                            "direction": direction,
+                            "stage": "CLOSE",
+                            "event": kind[0],
+                            "outcome": "SUCCESS",
+                            "reason_code": reason,
+                            "attempt_id": rec.attempt_id,
+                            "order_id": entry.get("order_id"),
+                            "trade_id": trade_id,
+                            "transaction_id": tx,
+                            "timestamp": _parse_time(close.get("closed_at")),
+                        })
+                if self._enabled("CLOSE"):
+                    events.append({
+                        "event_id": _identity_id(self.account_id, trade_id, "CLOSED", tx),
+                        "correlation_id": signal,
+                        "instrument": instrument, "direction": direction,
+                        "stage": "CLOSE", "event": "TRADE_CLOSED",
+                        "outcome": "SUCCESS", "reason_code": "BROKER_CLOSE_RECONCILED",
+                        "attempt_id": rec.attempt_id,
+                        "order_id": entry.get("order_id"), "trade_id": trade_id,
+                        "transaction_id": tx,
+                        "timestamp": _parse_time(close.get("closed_at"))
+                    })
         return self.log.emit_many_once(events)
 
 

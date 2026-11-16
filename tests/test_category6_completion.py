@@ -367,6 +367,99 @@ class ProjectorTests(unittest.TestCase):
         )
 
 
+    def _closed_result(self):
+        self._seed()
+        completed = replace(
+            self._record(), closed=True, current_units=D("0"),
+            close_transaction_ids=("105",), result_counted=True,
+            net_pl_home=D("-15"), closed_at=NOW + timedelta(minutes=20)
+        )
+        state = {
+            "account_id": "acct-1",
+            "trades": {"11": completed.to_dict()},
+            "closed_results": {
+                "11": {
+                    "transaction_id": "105", "pl": "-15",
+                    "closed_at": "2026-11-15T10:20:00Z",
+                    "instrument": "EUR_USD"
+                }
+            }
+        }
+        return state
+
+    def test_P58_broker_verified_SL_hit_without_guessing_cause(self):
+        state = self._closed_result()
+        def broker(tx):
+            self.assertEqual(tx, "105")
+            return {
+                "id": "105", "type": "ORDER_FILL",
+                "accountID": "acct-1",
+                "reason": "STOP_LOSS_ORDER",
+                "tradesClosed": [{"tradeID": "11", "units": "-100",
+                                  "realizedPL": "-15"}]
+            }
+        self.projector.project(
+            self.journal.snapshot(), state, transaction_fetcher=broker
+        )
+        self.projector.project(
+            self.journal.snapshot(), state, transaction_fetcher=broker
+        )
+        rows = read_events(self.log.directory)
+        self.assertEqual(len([x for x in rows if x["event"] == "SL_HIT"]), 1)
+        self.assertEqual(len([x for x in rows if x["event"] == "TRADE_CLOSED"]), 1)
+        sl = next(x for x in rows if x["event"] == "SL_HIT")
+        self.assertEqual(sl["transaction_id"], "105")
+        self.assertEqual(sl["reason_code"], "STOP_LOSS_ORDER")
+
+    def test_P58_independent_TP_flag_without_generic_trade_flag(self):
+        state = self._closed_result()
+        proof = {
+            "id": "105", "type": "ORDER_FILL", "accountID": "acct-1",
+            "reason": "TAKE_PROFIT_ORDER",
+            "tradesClosed": [{"tradeID": "11", "units": "-100"}]
+        }
+        with (
+            patch.object(config, "CSV_LOG_TRADES", False),
+            patch.object(config, "CSV_LOG_TP_HIT", True)
+        ):
+            self.projector.project(
+                self.journal.snapshot(), state,
+                transaction_fetcher=lambda _: proof
+            )
+        self.assertEqual(
+            [x["event"] for x in read_events(self.log.directory)],
+            ["TP_HIT"]
+        )
+
+    def test_P58_manual_vs_bot_close_not_falsely_inferred(self):
+        state = self._closed_result()
+        proof = {
+            "id": "105", "type": "ORDER_FILL", "accountID": "acct-1",
+            "reason": "MARKET_ORDER_TRADE_CLOSE",
+            "tradesClosed": [{"tradeID": "11", "units": "-100"}]
+        }
+        self.projector.project(
+            self.journal.snapshot(), state, transaction_fetcher=lambda _: proof
+        )
+        events = [x["event"] for x in read_events(self.log.directory)]
+        self.assertIn("TRADE_CLOSED", events)
+        self.assertNotIn("MANUAL_CLOSE", events)
+        self.assertNotIn("SYSTEM_CLOSE", events)
+
+    def test_P60_wrong_close_transaction_refused_without_audit_claim(self):
+        state = self._closed_result()
+        bad = {
+            "id": "105", "type": "ORDER_FILL", "accountID": "other",
+            "reason": "STOP_LOSS_ORDER",
+            "tradesClosed": [{"tradeID": "11"}]
+        }
+        with self.assertRaises(AuditError):
+            self.projector.project(
+                self.journal.snapshot(), state, transaction_fetcher=lambda _: bad
+            )
+        self.assertEqual(read_events(self.log.directory), [])
+
+
 class NetAccountingTests(unittest.TestCase):
     def test_P71_no_implicit_gross_basis_and_explicit_inclusions(self):
         cost = FillCosts(D("2"), D("1"), D("3"), D("4"))
