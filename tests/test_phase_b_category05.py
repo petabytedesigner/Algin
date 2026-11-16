@@ -216,7 +216,7 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_candle_open_time_must_align_with_m15_boundary(self):
         # Distinct seconds for the same candle must never yield extra IDs.
-        off_grid = NOW - timedelta(minutes=15) + timedelta(seconds=1)
+        off_grid = NOW - timedelta(minutes=30) + timedelta(seconds=1)
         self.assertEqual(
             self.coordinator.preview(
                 self.request(candle_time=off_grid)
