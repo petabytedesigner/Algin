@@ -115,10 +115,18 @@ class ExposureAndRetirementTests(LifecycleFixture):
         self.assertEqual(snapshot.exposure.reservations, ())
         self.assertFalse(snapshot.losses.verified)
         self.assertFalse(snapshot.entry_allowed)
+        # An old FILLED marker alone is not permission to reuse capacity.
+        with self.assertRaises(JournalError):
+            self.journal.begin(
+                signal_id="without-proof", attempt_id="without-proof",
+                request={"order": {"instrument": "GBP_USD", "units": "10"}},
+                risk_pct="0.5", margin_home="10", grade="B"
+            )
         created = self.journal.begin(
             signal_id="later", attempt_id="later",
             request={"order": {"instrument": "GBP_USD", "units": "10"}},
-            risk_pct="0.5", margin_home="10", grade="B"
+            risk_pct="0.5", margin_home="10", grade="B",
+            lifecycle_store=self.store
         )
         self.assertEqual(created["status"], "PREPARED")
         with self.assertRaises(JournalError):
