@@ -340,8 +340,18 @@ class AccountReconciler:
                       for x in TradeRecord.from_dict(v).partial_phases.values())
                for v in proposed["trades"].values()):
             blockers.append("Unconfirmed BE/partial management operation")
+        if blockers:
+            # A broker snapshot with unresolved inventory or intents must not
+            # make the locally persisted cursor appear fully reconciled.
+            # Retain the previous durable snapshot and replay this batch after
+            # the discrepancy is investigated. Report no uncommitted closures.
+            return ReconcileReport(
+                persisted["cursor"], (), tuple(blockers), (),
+                entry_allowed=False,
+            )
         if cursor != persisted["cursor"]:
-            # Persist complete validated transaction state in one atomic commit.
+            # Persist the complete validated transaction state + cursor in
+            # ONE checksummed atomic replacement; never cursor-only.
             self.store.mutate(
                 lambda s: s.update(proposed),
                 expected_cursor=persisted["cursor"],
