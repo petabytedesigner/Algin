@@ -250,12 +250,50 @@ def parse_transaction(tx):
             if key in tx and _money(tx[key], key) != 0:
                 raise FinancialEvidenceError("Unexpected monetary nonfinancial transaction")
     cash_net = None if kind == "TRANSFER_FUNDS" else _net(parts)
+    # A complete account total is NOT automatically a complete trade
+    # attribution. Children must account for the source's aggregate and
+    # fees must be uniquely attributable, otherwise trade net is unknown.
+    allocation_complete = True
+    if kind == "ORDER_FILL":
+        allocation_complete = (
+            cash_net is not None
+            and (len(effects) == 1 or (
+                parts["commission"] == "0" and parts["guaranteed_fee"] == "0"
+            ))
+            and all(
+                x["components"]["realized_pl"] is not None
+                and x["components"]["financing"] is not None
+                for x in effects
+            )
+        )
+    elif kind in {"DAILY_FINANCING", "DIVIDEND_ADJUSTMENT"}:
+        detail_key = (
+            "positionFinancings" if kind == "DAILY_FINANCING"
+            else "openTradeDividendAdjustments"
+        )
+        value_key = (
+            "financing" if kind == "DAILY_FINANCING"
+            else "dividend_adjustment"
+        )
+        allocation_complete = (
+            cash_net is not None and detail_key in tx
+            and all(
+                x["components"][value_key] is not None for x in effects
+            )
+            and sum(
+                (_money(x["components"][value_key], value_key)
+                 for x in effects), Decimal("0")
+            ) == _money(parts[value_key], value_key)
+        )
+    elif kind not in _NONFINANCIAL | {"TRANSFER_FUNDS"}:
+        allocation_complete = False
     return {
         "type": kind,
         "components": parts,
         "account_net": cash_net,
         "funds_transfer": funding,
         "trade_effects": effects,
+        "allocation_complete": allocation_complete,
     }
 
 
@@ -285,12 +323,14 @@ def validate_ledger(ledger, *, cursor, processed):
         if int(tid) <= int(base) or int(tid) > int(cursor) or tid not in seen:
             raise FinancialEvidenceError("Financial event uncommitted/out of cursor range")
         if not isinstance(event, dict) or set(event) != {
-            "type", "components", "account_net", "funds_transfer", "trade_effects"
+            "type", "components", "account_net", "funds_transfer",
+            "trade_effects", "allocation_complete"
         }:
             raise FinancialEvidenceError("Malformed financial event")
         kind = event["type"]
-        if not isinstance(kind, str) or not kind:
-            raise FinancialEvidenceError("Invalid financial event kind")
+        if (not isinstance(kind, str) or not kind
+            or type(event["allocation_complete"]) is not bool):
+            raise FinancialEvidenceError("Invalid financial event kind/allocation")
         parts = event["components"]
         if not isinstance(parts, dict) or set(parts) != set(_FIELDS):
             raise FinancialEvidenceError("Financial components missing")
@@ -372,6 +412,9 @@ def trade_summary(ledger, trade_id):
     related = []
     for tid, event in sorted(ledger["events"].items(), key=lambda x: int(x[0])):
         matching = [x for x in event["trade_effects"] if x["trade_id"] == trade_id]
+        if (event["type"] in _FINANCIAL
+            and not event["allocation_complete"]):
+            incomplete.append(tid)
         if not matching:
             # Unallocated financial transactions may belong to this trade.
             if event["type"] in _FINANCIAL and (
@@ -388,8 +431,13 @@ def trade_summary(ledger, trade_id):
             seen_open = True
         if any(x["kind"] == "CLOSE" for x in matching):
             seen_closed = True
-        if event["account_net"] is None or len(event["trade_effects"]) != 1:
-            incomplete.append(tid)
+        if (event["account_net"] is None
+            or (event["type"] == "ORDER_FILL"
+                and len(event["trade_effects"]) != 1
+                and (event["components"]["commission"] != "0"
+                     or event["components"]["guaranteed_fee"] != "0"))):
+            if tid not in incomplete:
+                incomplete.append(tid)
             continue
         effect = matching[0]
         part = effect["components"]
@@ -408,7 +456,7 @@ def trade_summary(ledger, trade_id):
             if event["type"] == "DAILY_FINANCING"
             else _money(part["dividend_adjustment"], "trade dividend")
         )
-        if event["type"] == "ORDER_FILL":
+        if event["type"] == "ORDER_FILL" and len(event["trade_effects"]) == 1:
             amount -= _money(event["components"]["commission"], "commission")
             amount -= _money(event["components"]["guaranteed_fee"], "guaranteed fee")
         total += amount
