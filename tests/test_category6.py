@@ -83,7 +83,10 @@ class SimulationTests(unittest.TestCase):
 
     def test_P71_costs_deducted_once_and_no_negative_or_nan(self):
         costs=FillCosts(D("2"),D("1"),D("3"),D("4"))
-        self.assertEqual(net_result(gross_pl="100",costs=costs),D("90"))
+        self.assertEqual(net_result(gross_pl="100",costs=costs,
+                                    gross_includes=()),D("90"))
+        with self.assertRaises(BacktestError):
+            net_result(gross_pl="100",costs=costs)
         self.assertEqual(net_result(gross_pl="100",costs=costs,
                                     gross_includes=("spread","slippage")),D("93"))
         with self.assertRaises(BacktestError):
