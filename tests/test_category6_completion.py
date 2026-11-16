@@ -460,6 +460,50 @@ class ProjectorTests(unittest.TestCase):
         self.assertEqual(read_events(self.log.directory), [])
 
 
+    def test_P60_prepared_unknown_filled_replay_keeps_original_identity(self):
+        self.journal.begin(
+            signal_id="signal-transition", attempt_id="algin-trans",
+            request=self.base, risk_pct="1", margin_home="100", grade="A"
+        )
+        self.projector.project(self.journal.snapshot())
+        self.journal.transition("algin-trans", "IN_FLIGHT")
+        self.projector.project(self.journal.snapshot())
+        self.journal.transition("algin-trans", "UNKNOWN")
+        self.projector.project(self.journal.snapshot())
+        self.journal.transition(
+            "algin-trans", "FILLED", order_id="10", trade_id="11",
+            filled_units="100", fill_price="1.1000", protection_verified=True
+        )
+        self.projector.project(self.journal.snapshot())
+        self.projector.project(self.journal.snapshot())
+        events = read_events(self.log.directory)
+        names = {x["event"] for x in events}
+        self.assertEqual(names, {
+            "INTENT_PREPARED", "ORDER_IN_FLIGHT", "ORDER_UNKNOWN",
+            "ORDER_FILLED", "PROTECTION_VERIFIED"
+        })
+        self.assertEqual(len(events), 5)
+        intent = next(x for x in events if x["event"] == "INTENT_PREPARED")
+        self.assertEqual(intent["trade_id"], "")
+        self.assertEqual(intent["order_id"], "")
+        self.assertEqual(
+            next(x for x in events if x["event"] == "ORDER_FILLED")["trade_id"],
+            "11"
+        )
+
+    def test_P59_confirmed_loss_cooldown_is_projected_once(self):
+        state = self._closed_result()
+        state["cooldowns"] = {"EUR_USD": "2026-11-15T10:50:00Z"}
+        self.projector.project(self.journal.snapshot(), state)
+        self.projector.project(self.journal.snapshot(), state)
+        rows = read_events(self.log.directory)
+        cooldowns = [x for x in rows if x["event"] == "COOLDOWN_STARTED"]
+        self.assertEqual(len(cooldowns), 1)
+        self.assertEqual(cooldowns[0]["outcome"], "BLOCKED")
+        self.assertEqual(cooldowns[0]["reason_code"], "CONFIRMED_LOSS_COOLDOWN")
+        self.assertEqual(cooldowns[0]["transaction_id"], "105")
+
+
 class NetAccountingTests(unittest.TestCase):
     def test_P71_no_implicit_gross_basis_and_explicit_inclusions(self):
         cost = FillCosts(D("2"), D("1"), D("3"), D("4"))

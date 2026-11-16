@@ -7,7 +7,7 @@ No network access and no broker mutation are performed by this module.
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import os
 from pathlib import Path
@@ -283,7 +283,10 @@ class AuditProjector:
             }
             if self._enabled("REQUEST"):
                 events.append({
-                    **base, "event_id": _identity_id(self.account_id, attempt, "PREPARED"),
+                    **base,
+                    # Immutable intent evidence cannot acquire future broker IDs.
+                    "order_id": None, "trade_id": None,
+                    "event_id": _identity_id(self.account_id, attempt, "PREPARED"),
                     "stage": "REQUEST", "event": "INTENT_PREPARED",
                     "outcome": "ATTEMPT", "reason_code": "DURABLE_INTENT",
                     "timestamp": _parse_time(entry.get("created_at")),
@@ -298,7 +301,12 @@ class AuditProjector:
                 }
                 outcome, reason = outcomes[status]
                 events.append({
-                    **base, "event_id": _identity_id(self.account_id, attempt, status),
+                    **base,
+                    # Unconfirmed state must not be retroactively enriched
+                    # by IDs only learned from a later broker fill.
+                    **({"order_id": None, "trade_id": None}
+                       if status in ("IN_FLIGHT", "UNKNOWN") else {}),
+                    "event_id": _identity_id(self.account_id, attempt, status),
                     "stage": "RESULT", "event": "ORDER_" + status,
                     "outcome": outcome, "reason_code": reason,
                     "timestamp": _parse_time(entry.get("updated_at")),
@@ -430,6 +438,54 @@ class AuditProjector:
                         "transaction_id": tx,
                         "timestamp": _parse_time(close.get("closed_at"))
                     })
+            if self._enabled("COOLDOWN"):
+                # A cooldown is attributed only when the lifecycle contains
+                # a confirmed losing close with exactly the recorded expiry.
+                from decimal import Decimal
+                for instrument, expiry in sorted(
+                    state.get("cooldowns", {}).items()
+                ):
+                    expiry_at = _parse_time(expiry)
+                    matches = []
+                    for trade_id, close in state["closed_results"].items():
+                        if close.get("instrument") != instrument:
+                            continue
+                        try:
+                            amount = Decimal(str(close["pl"]))
+                        except (TypeError, ValueError, KeyError) as exc:
+                            raise AuditError("Invalid cooldown P/L") from exc
+                        if not amount.is_finite():
+                            raise AuditError("Invalid cooldown P/L")
+                        if amount < 0 and (
+                            _parse_time(close["closed_at"]) + timedelta(minutes=30)
+                            == expiry_at
+                        ):
+                            matches.append((trade_id, close))
+                    # Multiple losses at the same closing time may each
+                    # justify a cooldown; retain their separate trade IDs.
+                    for trade_id, close in sorted(matches):
+                        rec = TradeRecord.from_dict(state["trades"][trade_id])
+                        if rec.attempt_id not in identities:
+                            raise AuditError("Unattributed cooldown")
+                        signal, _, direction, entry = identities[rec.attempt_id]
+                        events.append({
+                            "event_id": _identity_id(
+                                self.account_id, trade_id, "COOLDOWN", expiry
+                            ),
+                            "correlation_id": signal,
+                            "instrument": instrument,
+                            "direction": direction,
+                            "stage": "BLOCK",
+                            "event": "COOLDOWN_STARTED",
+                            "outcome": "BLOCKED",
+                            "reason_code": "CONFIRMED_LOSS_COOLDOWN",
+                            "attempt_id": rec.attempt_id,
+                            "order_id": entry.get("order_id"),
+                            "trade_id": trade_id,
+                            "transaction_id": close.get("transaction_id"),
+                            "timestamp": _parse_time(close.get("closed_at")),
+                            "detail": _field(expiry, "cooldown expiry", required=True)
+                        })
         return self.log.emit_many_once(events)
 
 
