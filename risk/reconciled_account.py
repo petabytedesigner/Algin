@@ -9,7 +9,7 @@ historical day-start NAV or a historical high-water mark.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -335,6 +335,15 @@ def build_risk_readiness(
         account, state, anchor, now=now
     )
     reasons.extend(loss_reasons)
+    if ("BROKER_RECONCILIATION_NOT_COMPLETE" in reasons
+        or "OWNED_BROKER_TRADE_REPORT_MISMATCH" in reasons):
+        # Never hand TradePlanner individually "verified" inputs if the
+        # complete reconciler is blocked. Exposing independent true flags here
+        # would allow a caller to bypass the aggregate readiness result.
+        exposure = replace(
+            exposure, verified=False, uncertain_outcomes_accounted=False
+        )
+        losses = replace(losses, verified=False)
     inputs_verified = not reasons and exposure.verified and losses.verified
     return RiskReadiness(
         exposure=exposure, losses=losses,
