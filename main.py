@@ -132,10 +132,21 @@ def _scan_once(cycle: str) -> int:
         else:
             enabled = stage == "BLOCK" and config.CSV_LOG_SIGNALS
         if enabled:
-            audit.emit(event_id=uuid4().hex,correlation_id=cycle,
-                       instrument=instrument,direction=direction,
-                       stage=stage,event=event,outcome=outcome,
-                       reason_code=reason)
+            try:
+                audit.emit(event_id=uuid4().hex,correlation_id=cycle,
+                           instrument=instrument,direction=direction,
+                           stage=stage,event=event,outcome=outcome,
+                           reason_code=reason)
+            except AuditError:
+                # Persist the precise root cause before legacy caller paths
+                # can catch the failure and return without a final heartbeat.
+                try:
+                    heartbeat.write(
+                        "BLOCKED", reason_code="AUDIT_FAILURE", cycle_id=cycle
+                    )
+                except HeartbeatError:
+                    LOG.error("Audit and heartbeat both unavailable")
+                raise
     try:
         heartbeat.write("ACTIVE",cycle_id=cycle)
     except HeartbeatError:
