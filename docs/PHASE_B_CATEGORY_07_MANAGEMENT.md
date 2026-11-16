@@ -31,7 +31,7 @@ Reconciler-i pranon konfirmimin e BE vetem pas `STOP_LOSS_ORDER` me `tradeID`, p
 
 ## 3. Timeout, UNKNOWN, restart, idempotence
 
-`OfflineManagementEngine` **nuk pranon** `PracticeTransport`, subclass-e te transportit sintetik ose transport arbitrar. Tipi i lejuar eshte vetëm `SyntheticLifecycleBroker`, qe nuk ka HTTP. Konfigurimi real i write-eve duhet te jete ende i çaktivizuar edhe per testin. Kontrollet e transportit ndodhin **para** regjistrimit te intent-it.
+`OfflineManagementEngine` **nuk pranon** `PracticeTransport`, subclass-e te transportit sintetik ose transport arbitrar. Tipi i lejuar eshte vetëm `SyntheticLifecycleBroker`, qe nuk ka HTTP. Konfigurimi real i write-eve duhet te jete ende i çaktivizuar edhe per testin. Kontrollet e transportit ndodhin **para** regjistrimit te intent-it. Menjehere para veprimit sintetik kontrollohen serish të gjitha tregtite e hapura ne account, cursor-i, SL/TP, units dhe journal-i; çdo inventar i ndryshuar bllokon veprimin pa write.
 
 - `INTENT` ruhet para operacionit sintetik. Pas nje timeout edhe pas efektit, `mark_unknown` ruan `UNKNOWN` dhe thirret vetem GET-only reconciliation. Nje konfirmim nga transaksionet mund ta zgjidhe pa POST/PUT te dyte.
 - Nese brokeri nuk jep prova te plota, rezultati mbetet `UNKNOWN`, pa blind retry. Nje restart mund te replays `sinceid` nga cursor-i i ruajtur; nje close/partial/BE i konfirmuar nuk dërgohet serish.
@@ -45,6 +45,6 @@ Kjo kategori **nuk** e lidh ende `main.py` me ekzekutimin real, nuk i aktivizon 
 
 ## Testet dhe kriteret e pranimit
 
-`tests/test_phase_b_category07.py` teston te gjithe ciklin e plote, BE dhe partial per SHORT, transaksione individuale, rikthim pas timeout/lost-ack dhe restart, SL/TP qe tejkalon nje nisme te planifikuar, mungesë mbylljeje, rreshtim cursor, kryerje te dyfishta dhe bllokim te transportit real.
+`tests/test_phase_b_category07.py` permban 26 teste offline: cikli i plote, BE dhe partial per SHORT, transaksione individuale, rikthim pas timeout/lost-ack dhe restart, SL/TP qe tejkalon nje nisme te planifikuar, mungesë mbylljeje, ndryshim inventari/mbrojtjeje pas stage, rreshtim cursor, kryerje te dyfishta dhe bllokim te transportit real.
 
 Pranohet për merge vetëm kur suita e plotë offline, workflow-t 1–6 dhe rishikimi i diff-it perfundojne me sukses. **Suksesi offline nuk eshte garanci e aksesit, sjelljes ose përfitimit real me OANDA.**
