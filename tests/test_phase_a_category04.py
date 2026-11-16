@@ -134,8 +134,10 @@ class ExposureAndRetirementTests(LifecycleFixture):
             "time": "2026-11-16T10:00:00Z",
             "tradesClosed": [{"tradeID": "11", "units": "-100", "realizedPL": "5"}],
         }, close=True)
-        with patch("storage.intent_journal.os.replace",
-                   side_effect=OSError("disk interrupted")):
+        # Patch only the journal's durable persistence boundary AFTER
+        # lifecycle commit (patching os.replace affects both modules).
+        with patch.object(self.journal, "_store",
+                          side_effect=JournalError("journal disk interrupted")):
             with self.service, self.assertRaises(JournalError):
                 self.service.run()
         self.assertEqual(self.store.load()["cursor"], "101")
