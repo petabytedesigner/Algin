@@ -54,8 +54,10 @@ def _money(value, name, *, nonnegative=False):
         amount = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise FinancialEvidenceError("Non-decimal " + name) from exc
-    if not amount.is_finite() or (nonnegative and amount < 0):
-        raise FinancialEvidenceError("Nonfinite or negative " + name)
+    if (not amount.is_finite()
+        or (nonnegative and amount < 0)
+        or abs(amount.adjusted()) > 50):
+        raise FinancialEvidenceError("Nonfinite or unreasonable " + name)
     return amount
 
 
@@ -162,6 +164,18 @@ def _order_fill(tx, parts):
             Decimal("0")
         ):
             raise FinancialEvidenceError("ORDER_FILL financing mismatch")
+    for field, label in (
+        ("guaranteed_fee", "guaranteed execution fee"),
+        ("half_spread_cost", "half-spread cost"),
+    ):
+        if parts[field] is not None and all(
+            e["components"][field] is not None for e in effects
+        ):
+            if _money(parts[field], label) != sum(
+                (_money(e["components"][field], label) for e in effects),
+                Decimal("0")
+            ):
+                raise FinancialEvidenceError("ORDER_FILL " + label + " mismatch")
     return effects
 
 
