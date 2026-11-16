@@ -211,7 +211,8 @@ class AccountReconciler:
                         if len(phases) != 1 or new_remaining == 0:
                             raise ReconcileError("Unattributed or mismatched partial reduction")
                         trade = trade.with_partial_confirmed(
-                            phases[0], amount, new_remaining
+                            phases[0], amount, new_remaining,
+                            transaction_id=tid,
                         )
                     else:
                         if new_remaining != 0:
@@ -297,7 +298,9 @@ class AccountReconciler:
                         and number(tx["price"], "confirmed stop", positive=True)
                             == trade.entry_price):
 
-                        trade = trade.with_stop_confirmed(tx["price"])
+                        trade = trade.with_stop_confirmed(
+                            tx["price"], transaction_id=tid
+                        )
                         state["trades"][trade_id] = trade.to_dict()
                     else:
                         raise ReconcileError("Unattributed stop-loss amendment")
