@@ -162,8 +162,13 @@ class LifecycleStore:
             "trades", "processed_transactions", "counted_closures",
             "closed_results", "cooldowns"
         }
-        if (not isinstance(data, dict) or
-            set(data) not in (legacy_fields, legacy_fields | {"financial_ledger"})):
+        permitted = (
+            legacy_fields,
+            legacy_fields | {"financial_ledger"},
+            legacy_fields | {"close_intents"},
+            legacy_fields | {"financial_ledger", "close_intents"},
+        )
+        if not isinstance(data, dict) or set(data) not in permitted:
             raise StateError("Unknown lifecycle schema")
         if (data["version"] != self.VERSION or data["account_id"] != self.account_id
             or data["environment"] != self.environment):
@@ -241,6 +246,51 @@ class LifecycleStore:
             trade = TradeRecord.from_dict(record)
             if trade.trade_id != key:
                 raise StateError("Trade record identity mismatch")
+        # Optional version-1 extension: durable, single-account close
+        # reservations. Accept older checksummed snapshots unchanged, but
+        # never silently repair contradictory close evidence.
+        intents = data.get("close_intents", {})
+        if not isinstance(intents, dict):
+            raise StateError("Malformed durable close-intent collection")
+        for trade_id, intent in intents.items():
+            if (not isinstance(trade_id, str)
+                or not _TRADE.fullmatch(trade_id)
+                or trade_id not in data["trades"]
+                or not isinstance(intent, dict)
+                or set(intent) != {
+                    "trade_id", "attempt_id", "status", "source", "units",
+                    "cursor_before", "created_at", "confirmed_transaction_id"
+                } or intent["trade_id"] != trade_id):
+                raise StateError("Invalid durable close intent identity")
+            trade = TradeRecord.from_dict(data["trades"][trade_id])
+            if (intent["attempt_id"] != trade.attempt_id
+                or intent["source"] not in ("SYSTEM", "MANUAL")
+                or intent["status"] not in (
+                    "INTENT", "UNKNOWN", "CONFIRMED", "SUPERSEDED"
+                )
+                or not isinstance(intent["cursor_before"], str)
+                or not _TRADE.fullmatch(intent["cursor_before"])
+                or int(intent["cursor_before"]) > int(data["cursor"])):
+                raise StateError("Durable close intent account/cursor mismatch")
+            from risk.trade_plan import number
+            amount = number(intent["units"], "close units", positive=True)
+            if amount > abs(trade.initial_units):
+                raise StateError("Durable close units exceed original trade")
+            from utils.time_tools import parse_utc
+            parse_utc(intent["created_at"])
+            tx = intent["confirmed_transaction_id"]
+            if intent["status"] in ("CONFIRMED", "SUPERSEDED"):
+                result = data["closed_results"].get(trade_id)
+                if (not isinstance(tx, str) or not _TRADE.fullmatch(tx)
+                    or not isinstance(result, dict)
+                    or result["transaction_id"] != tx
+                    or tx not in data["processed_transactions"]
+                    or tx not in data["counted_closures"]
+                    or int(tx) <= int(intent["cursor_before"])
+                    or not trade.closed):
+                    raise StateError("Confirmed close has no durable broker proof")
+            elif tx is not None or trade.closed:
+                raise StateError("Close-intent state conflicts with closed trade")
         return data
 
     def load(self):
@@ -278,6 +328,7 @@ class LifecycleStore:
             "trades": trades if trades is not None else {},
             "processed_transactions": [], "counted_closures": [],
             "closed_results": {}, "cooldowns": {},
+            "close_intents": {},
             "financial_ledger": initial_ledger(cursor),
         }
         with self._exclusive():
