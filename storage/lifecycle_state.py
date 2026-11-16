@@ -246,6 +246,16 @@ class LifecycleStore:
             trade = TradeRecord.from_dict(record)
             if trade.trade_id != key:
                 raise StateError("Trade record identity mismatch")
+            if (trade.be_transaction_id is not None
+                and trade.be_transaction_id not in data["processed_transactions"]):
+                raise StateError("BE confirmation not in processed transaction history")
+            for phase_data in trade.partial_phases.values():
+                tid = phase_data.get("transaction_id")
+                if tid is not None and (
+                    tid not in data["processed_transactions"]
+                    or tid not in trade.close_transaction_ids
+                ):
+                    raise StateError("Partial confirmation not in trade transaction history")
         # Optional version-1 extension: durable, single-account close
         # reservations. Accept older checksummed snapshots unchanged, but
         # never silently repair contradictory close evidence.
