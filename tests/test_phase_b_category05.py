@@ -208,6 +208,23 @@ class CoordinatorTests(unittest.TestCase):
         )
         self.assertEqual(result.reason_code, "CANDLE_EXPIRED")
 
+    def test_unfinished_m15_candle_is_rejected_even_with_true_gate(self):
+        request = self.request(candle_time=NOW)
+        self.assertEqual(
+            self.coordinator.preview(request).reason_code, "CANDLE_NOT_COMPLETE"
+        )
+
+    def test_candle_open_time_must_align_with_m15_boundary(self):
+        # Distinct seconds for the same candle must never yield extra IDs.
+        off_grid = NOW - timedelta(minutes=15) + timedelta(seconds=1)
+        self.assertEqual(
+            self.coordinator.preview(
+                self.request(candle_time=off_grid)
+            ).reason_code, "CANDLE_ALIGNMENT_INVALID"
+        )
+        with self.assertRaises(ValueError):
+            stable_signal_id("acct-1", "EUR_USD", "LONG", off_grid)
+
     def test_grade_c_never_enters_risk_planner(self):
         bad = replace(self.signal, grade="C")
         result = self.coordinator.preview(self.request(signal=bad))
