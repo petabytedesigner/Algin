@@ -91,12 +91,16 @@ class V20PriceTests(unittest.TestCase):
         }], "homeConversions": [
             {"currency": "EUR", "accountLoss": "1.1", "positionValue": "1.1"}
         ]}
-        with patch("broker.risk_data.safe_request", return_value=Response(payload)):
+        with (patch.object(config, "API_KEY", "synthetic-only"),
+              patch.object(config, "ACCOUNT_ID", "acct-1"),
+              patch("broker.risk_data.safe_request", return_value=Response(payload))):
             quote = get_quote_conversions("EUR_USD", "USD")
         self.assertEqual(quote.bid, D("1.1000"))
         self.assertEqual(quote.base_value_to_home, D("1.1"))
         payload["prices"][0]["tradeable"] = False
-        with patch("broker.risk_data.safe_request", return_value=Response(payload)):
+        with (patch.object(config, "API_KEY", "synthetic-only"),
+              patch.object(config, "ACCOUNT_ID", "acct-1"),
+              patch("broker.risk_data.safe_request", return_value=Response(payload))):
             with self.assertRaises(PlanRejected):
                 get_quote_conversions("EUR_USD", "USD")
 
