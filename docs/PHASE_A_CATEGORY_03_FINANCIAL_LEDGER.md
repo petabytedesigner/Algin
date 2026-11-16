@@ -33,7 +33,7 @@ Per nje `ORDER_FILL` te plote, **account-home-currency cash result** per periudh
 
 ## Testimi dhe kufizimet
 
-`tests/test_phase_a_category03.py`: 19 teste offline per net P/L me shpenzime, spread jo te dyfishuar, nje ose shume trade, financim ditor, dividend, transferim fondesh, fusha te munguara, korruptim, duplicate, perputhje shumash, crash atomik dhe migrim legacy. Te gjitha testet ekzistuese duhet te kalojne ne PR.
+`tests/test_phase_a_category03.py`: 23 teste offline per net P/L me shpenzime, spread jo te dyfishuar, nje ose shume trade, financim ditor, dividend, transferim fondesh, fusha te munguara, korruptim, duplicate, perputhje shumash, crash atomik dhe migrim legacy. Te gjitha testet ekzistuese duhet te kalojne ne PR.
 
 **Kufijte:** Nuk ka burim real-time te transaksioneve ne keto teste. Legacy `TradeRecord.net_pl_home` / `closed_results.pl` aktualisht reflektojne `TradeReduce.realizedPL`, jo neto te attestuar te ketij ledger-i; nuk duhet te perdoren per perfundime perfomance apo risk te bazuar ne net. Kategoria 04 do te ndertoje `LossState` dhe vendimet e riskut mbi te dhëna te verifikuara. Pajtimi i transaksioneve te vjetra dhe komisionet per trade ne multi-fill kane nevoje per evidence shtese; nuk plotesohen me hamendesim.
 
