@@ -59,6 +59,7 @@ class TradeRecord:
     net_pl_home: Decimal = Decimal("0")
     result_counted: bool = False
     closed_at: datetime | None = None
+    be_transaction_id: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.trade_id, str) or not _NUMERIC_ID.fullmatch(self.trade_id):
@@ -109,9 +110,23 @@ class TradeRecord:
         for name, value in self.partial_phases.items():
             if (not isinstance(name, str) or not name
                 or not isinstance(value, dict) or value.get("state") not in _PHASES
-                or not isinstance(value.get("units"), str)):
+                or not isinstance(value.get("units"), str)
+                or not set(value).issubset({"state", "units", "transaction_id"})):
                 raise LifecycleError("Invalid partial-close phase")
             _positive(value["units"], "partial units")
+            phase_tx = value.get("transaction_id")
+            if phase_tx is not None and (
+                value["state"] != "CONFIRMED"
+                or not isinstance(phase_tx, str)
+                or not _NUMERIC_ID.fullmatch(phase_tx)
+            ):
+                raise LifecycleError("Partial confirmation transaction invalid")
+        if self.be_transaction_id is not None and (
+            self.be_state != "CONFIRMED"
+            or not isinstance(self.be_transaction_id, str)
+            or not _NUMERIC_ID.fullmatch(self.be_transaction_id)
+        ):
+            raise LifecycleError("BE confirmation transaction invalid")
         if not isinstance(self.close_transaction_ids, tuple) or len(set(
             self.close_transaction_ids
         )) != len(self.close_transaction_ids):
@@ -196,6 +211,7 @@ class TradeRecord:
             "net_pl_home": str(self.net_pl_home),
             "result_counted": self.result_counted,
             "closed_at": iso_utc(self.closed_at) if self.closed_at else None,
+            "be_transaction_id": self.be_transaction_id,
         }
 
     @classmethod
@@ -209,7 +225,7 @@ class TradeRecord:
             "be_state", "partial_phases", "closed", "close_transaction_ids",
             "net_pl_home", "result_counted", "closed_at"
         }
-        if set(data) != required:
+        if set(data) not in (required, required | {"be_transaction_id"}):
             raise LifecycleError("Missing/unknown trade lifecycle fields")
         return cls(
             trade_id=data["trade_id"], attempt_id=data["attempt_id"],
@@ -223,18 +239,23 @@ class TradeRecord:
             partial_phases=data["partial_phases"],
             closed=data["closed"], close_transaction_ids=tuple(data["close_transaction_ids"]),
             net_pl_home=data["net_pl_home"], result_counted=data["result_counted"],
-            closed_at=parse_utc(data["closed_at"]) if data["closed_at"] else None
+            closed_at=parse_utc(data["closed_at"]) if data["closed_at"] else None,
+            be_transaction_id=data.get("be_transaction_id"),
         )
 
-    def with_stop_confirmed(self, new_stop):
+    def with_stop_confirmed(self, new_stop, transaction_id=None):
         target = _positive(new_stop, "confirmed stop")
         if self.be_state not in ("INTENT", "UNKNOWN"):
             raise LifecycleError("No BE intent to confirm")
         if target != self.entry_price:
             raise LifecycleError("Unexpected broker BE stop")
-        return replace(self, current_stop=target, be_state="CONFIRMED")
+        return replace(
+            self, current_stop=target, be_state="CONFIRMED",
+            be_transaction_id=transaction_id,
+        )
 
-    def with_partial_confirmed(self, phase, close_units, remaining_signed):
+    def with_partial_confirmed(self, phase, close_units, remaining_signed,
+                               transaction_id=None):
         record = self.partial_phases.get(phase)
         if record is None or record["state"] not in ("INTENT", "UNKNOWN"):
             raise LifecycleError("No partial intent to confirm")
@@ -247,4 +268,6 @@ class TradeRecord:
             raise LifecycleError("Confirmed broker remainder mismatch")
         phases = dict(self.partial_phases)
         phases[phase] = {"state": "CONFIRMED", "units": str(amount)}
+        if transaction_id is not None:
+            phases[phase]["transaction_id"] = transaction_id
         return replace(self, current_units=remaining, partial_phases=phases)
