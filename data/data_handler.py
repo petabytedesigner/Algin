@@ -1,6 +1,7 @@
 from __future__ import annotations
 import config as config
 from utils.common import safe_request, log
+from broker.oanda_v20_contract import price_tradeable
 from data.candle_validation import CandleDataError, parse_oanda_candles
 from utils.time_tools import parse_utc, utc_now
 from datetime import timedelta
@@ -67,13 +68,9 @@ class DataHandler:
             if len(matches) != 1:
                 return None
             price = matches[0]
-            # Current v20 tradeable is a boolean; legacy status is deprecated.
-            if "tradeable" in price:
-                if price["tradeable"] is not True:
-                    return None
-            elif price.get("status") != "tradeable":
-                return None
-            if price.get("status") in ("non-tradeable", "invalid"):
+            # Current ClientPrice.tradeable is authoritative. Deprecated
+            # status is used only for legacy replies without the boolean.
+            if not price_tradeable(price):
                 return None
             timestamp = parse_utc(price["time"])
             now = utc_now()
