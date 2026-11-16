@@ -240,6 +240,10 @@ def _losses_from_anchor(account, state, anchor, *, now):
                     loss_home -= pl
     closes = []
     for trade_id, closed in state["closed_results"].items():
+        # The starting streak is attested at the day-start cursor.
+        # Replaying earlier closes would count an old loss twice.
+        if int(closed["transaction_id"]) <= int(anchor.day_start_cursor):
+            continue
         detail = trade_summary(ledger, trade_id)
         if not detail["complete"] or detail["net_pl_home"] is None:
             return fallback, ("CLOSED_TRADE_NET_NOT_VERIFIED",)
