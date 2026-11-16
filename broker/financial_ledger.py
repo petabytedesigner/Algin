@@ -347,6 +347,15 @@ def validate_ledger(ledger, *, cursor, processed):
             _money(transfer, "funds transfer")
         if kind != "TRANSFER_FUNDS" and transfer is not None:
             raise FinancialEvidenceError("Funds transfer mixed into trading result")
+        if kind == "TRANSFER_FUNDS" and (
+            any(parts[k] is not None for k in _FIELDS)
+            or event["allocation_complete"] is not True
+        ):
+            raise FinancialEvidenceError("Transfer funds cannot be trading P/L")
+        if kind not in _FINANCIAL | _NONFINANCIAL | {"TRANSFER_FUNDS"} and (
+            event["account_net"] is not None or event["allocation_complete"]
+        ):
+            raise FinancialEvidenceError("Unknown transaction claimed complete")
         effects = event["trade_effects"]
         if not isinstance(effects, list):
             raise FinancialEvidenceError("Malformed trade allocation")
@@ -416,15 +425,15 @@ def trade_summary(ledger, trade_id):
             and not event["allocation_complete"]):
             incomplete.append(tid)
         if not matching:
-            # Unallocated financial transactions may belong to this trade.
-            if event["type"] in _FINANCIAL and (
-                event["account_net"] is None or (
-                    event["type"] in {"DAILY_FINANCING", "DIVIDEND_ADJUSTMENT"}
-                    and event["account_net"] != "0"
-                    and not event["trade_effects"]
-                )
-            ):
-                incomplete.append(tid)
+            # A missing source allocation (including an unknown future
+            # broker type) may belong to this trade. Block rather than guess.
+            if (event["type"] in _FINANCIAL
+                and not event["allocation_complete"]
+                or event["type"] not in (
+                    _FINANCIAL | _NONFINANCIAL | {"TRANSFER_FUNDS"}
+                )):
+                if tid not in incomplete:
+                    incomplete.append(tid)
             continue
         related.append(tid)
         if any(x["kind"] == "OPEN" for x in matching):
