@@ -374,6 +374,16 @@ class AccountReconciler:
                 lambda s: s.update(proposed),
                 expected_cursor=persisted["cursor"],
             )
+        # Retirement is a SECOND, idempotent local persistence step after
+        # broker transactions and confirmed closure were durably committed.
+        # Failure never advances a new entry: the prior FILLED journal remains
+        # unresolved until replay. The account lease remains held throughout.
+        committed = self.store.load()
+        for attempt in attempts:
+            if (attempt["status"] == "FILLED"
+                and attempt.get("retired") is not True
+                and attempt.get("trade_id") in committed["closed_results"]):
+                self.journal.retire_confirmed(attempt["attempt_id"], self.store)
         return ReconcileReport(
             cursor, tuple(sorted(
                 tid for tid in broker_trades if tid in proposed["trades"]
