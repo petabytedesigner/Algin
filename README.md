@@ -4,7 +4,7 @@
 >
 > Gjashtë kategoritë e zhvillimit janë integruar në `main` dhe testet automatike offline kanë kaluar. **Kjo nuk do të thotë se boti është gati të hapë, menaxhojë apo mbyllë tregti në OANDA.** Rruga e plotë operative, kontabiliteti i riskut dhe verifikimi real në Practice kanë ende punë të pambyllura. Asnjë parametër nuk garanton fitim.
 >
-> **Referenca e këtij dokumentimi:** auditimi i datës 2026-11-15, me kodin bazë `a0ecdf172793caccf3b065d4adc8749bd6aa9a26` (para përditësimit të këtij README). Këtu dokumentohen aftësitë e verifikuara në kod, kufizimet aktuale dhe **projektimi F0–F7**, jo zbatimi i atij projektimi.
+> **Baseline e verifikuar:** PR #8 u integrua më 2026-11-16 në commit-in `c2fc12fb3d433189febf06a8ec5be02c5332e104`. Shiko [Faza A / Kategoria 01](docs/PHASE_A_CATEGORY_01_BASELINE.md) për provat, kufizimet dhe çështjet e hapura. Seksioni F0–F7 është projektim, jo dëshmi për përfundimin operacional.
 
 ## Përmbajtja
 
@@ -116,7 +116,7 @@ Termux **nuk është testuar ende** për funksionim afatgjatë me ekran të fiku
 
 ### 2.2 Kredencialet dhe siguria
 
-`.env.example` përmban vetëm emrat e variablave. **Projekti nuk e ngarkon automatikisht skedarin `.env`**; konfigurimi lexon variablat e mjedisit në import.
+**Kredencialet e OANDA lexohen nga variablat e mjedisit gjatë importit të konfigurimit.** Skedari `.env.example` nuk ngarkohet automatikisht; përmbajtja e tij nuk konfirmon autentikimin e suksesshëm te brokeri.
 
 Linux / Termux, në një shell lokal privat:
 
