@@ -125,6 +125,19 @@ class IntentJournal:
                     raise JournalError("Journal timestamps regressed")
                 if type(attempt.get("protection_verified")) is not bool:
                     raise JournalError("Invalid journal protection marker")
+                retired = attempt.get("retired", False)
+                close_tx = attempt.get("closure_transaction_id")
+                if type(retired) is not bool:
+                    raise JournalError("Invalid retired intent marker")
+                if retired:
+                    if (attempt["status"] != "FILLED"
+                        or attempt["protection_verified"] is not True
+                        or not isinstance(attempt.get("trade_id"), str)
+                        or not isinstance(close_tx, str)
+                        or not close_tx.isascii() or not close_tx.isdecimal()):
+                        raise JournalError("Retired fill missing verified closure identity")
+                elif close_tx is not None:
+                    raise JournalError("Unretired intent contains closure identity")
             return data
         except JournalError:
             raise
@@ -183,7 +196,11 @@ class IntentJournal:
             )):
                 raise JournalError("Duplicate signal/attempt: broker resend prohibited")
             # Category 4 must reconcile prior fills/unknowns before new orders.
-            if any(x["status"] not in _TERMINAL for x in existing.values()):
+            if any(
+                x["status"] not in _TERMINAL and not (
+                    x["status"] == "FILLED" and x.get("retired") is True
+                ) for x in existing.values()
+            ):
                 raise JournalError("Unresolved/filled trade in account journal")
             now = iso_utc(utc_now())
             entry = {
@@ -194,6 +211,7 @@ class IntentJournal:
                 "created_at": now, "updated_at": now,
                 "request_id": None, "order_id": None, "trade_id": None,
                 "protection_verified": False,
+                "retired": False, "closure_transaction_id": None,
             }
             existing[attempt_id] = entry
             self._store(data)
@@ -225,9 +243,58 @@ class IntentJournal:
                 raise JournalError("Missing durable intent")
             if status not in allowed[entry["status"]]:
                 raise JournalError("Illegal state transition")
+            if entry.get("retired") is True:
+                raise JournalError("Retired intent cannot transition")
             entry.update(fields)
             entry["status"] = status
             entry["updated_at"] = iso_utc(utc_now())
+            self._store(data)
+            return dict(entry)
+
+    def retire_confirmed(self, attempt_id: str, store) -> dict:
+        """Retire a FILLED entry only from *persisted verified close* evidence.
+
+        Retirement releases the active reservation, never the immutable
+        attempt identity. No broker write. If persistence fails after a
+        lifecycle commit, FILLED remains blocked until a safe replay.
+        """
+        _identity(attempt_id, "attempt ID")
+        from storage.lifecycle_state import LifecycleStore
+        from risk.trade_lifecycle import TradeRecord
+        if (not isinstance(store, LifecycleStore)
+            or store.account_id != self.account_id
+            or store.environment != "practice"):
+            raise JournalError("Closure proof belongs to another account")
+        with self._locked():
+            data = self._load()
+            entry = data["attempts"].get(attempt_id)
+            if entry is None or entry["status"] != "FILLED":
+                raise JournalError("Retirement requires an existing FILLED attempt")
+            if entry.get("protection_verified") is not True:
+                raise JournalError("Unprotected fill cannot be retired automatically")
+            state = store.load()
+            if state is None:
+                raise JournalError("Durable lifecycle closure missing")
+            trade_id = entry.get("trade_id")
+            saved = state["trades"].get(trade_id)
+            result = state["closed_results"].get(trade_id)
+            if not isinstance(saved, dict) or not isinstance(result, dict):
+                raise JournalError("No confirmed trade closure for filled attempt")
+            record = TradeRecord.from_dict(saved)
+            tx = result["transaction_id"]
+            if (record.attempt_id != attempt_id or record.trade_id != trade_id
+                or not record.closed or not record.result_counted
+                or tx not in record.close_transaction_ids
+                or tx not in state["counted_closures"]
+                or tx not in state["processed_transactions"]):
+                raise JournalError("Closure identity lacks durable transaction proof")
+            if entry.get("retired") is True:
+                if entry.get("closure_transaction_id") != tx:
+                    raise JournalError("Retired attempt closure changed")
+                return dict(entry)
+            entry["retired"] = True
+            entry["closure_transaction_id"] = tx
+            # Keep updated_at stable for deterministic audit projection.
             self._store(data)
             return dict(entry)
 
