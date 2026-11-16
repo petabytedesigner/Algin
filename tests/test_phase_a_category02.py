@@ -108,7 +108,7 @@ class JournalTests(unittest.TestCase):
         self.assertFalse(self.journal.path.exists())
 
     def test_stale_or_replaced_lock_is_never_deleted(self):
-        self.journal.lock_path.parent.mkdir(parents=True)
+        self.journal.lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.journal.lock_path.write_text("orphan")
         with self.assertRaises(JournalError):
             self.journal.snapshot()
