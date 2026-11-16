@@ -322,6 +322,33 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(blocked.status, "BLOCKED")
         self.assertEqual(other.post_count, 0)
 
+    def test_post_ack_journal_failure_remains_unknown_and_reserved(self):
+        from unittest.mock import patch
+        from storage.intent_journal import JournalError
+
+        sim = self.simulation()
+        actual = self.journal.transition
+
+        def fail_after_post(attempt_id, status, **fields):
+            if status == "FILLED":
+                raise JournalError("synthetic crash after broker reply")
+            return actual(attempt_id, status, **fields)
+
+        with patch.object(self.journal, "transition", side_effect=fail_after_post):
+            result = self.coordinator.simulate(
+                self.request(), refresh=lambda: self.request(), transport=sim
+            )
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(result.reason_code, "SYNTHETIC_OUTCOME_UNCERTAIN")
+        self.assertEqual(sim.post_count, 1)
+        self.assertEqual(self.journal.snapshot()[0]["status"], "IN_FLIGHT")
+        another = self.simulation()
+        blocked = self.coordinator.simulate(
+            self.request(), refresh=lambda: self.request(), transport=another
+        )
+        self.assertEqual(blocked.status, "BLOCKED")
+        self.assertEqual(another.post_count, 0)
+
     def test_fake_rejection_still_records_durable_identity(self):
         sim = self.simulation(mode="REJECTED")
         result = self.coordinator.simulate(
