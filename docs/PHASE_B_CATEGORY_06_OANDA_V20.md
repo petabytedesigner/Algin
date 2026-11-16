@@ -21,7 +21,7 @@
 
 ### 2. Identiteti dhe çmimi i `ORDER_FILL`
 
-`broker/execution_result.py` perdor `tradeOpened.price` (ose `tradeReduced.price`/`tradesClosed[0].price` per reduktime/mbyllje) kur jepet. `OrderFillTransaction.price` eshte vetem fallback legacy. `fullVWAP` **nuk perdoret** per te krijuar çmim individual tregtie kur mungon prova e sakte; rezultati eshte `UNKNOWN`. Mbeten detyrime klasifikimi per `orderID`, `tradeID`, units dhe lidhjen me `orderCreateTransaction`. `OrderEngine` ben GET per SL/TP/ownership pas fill-it, jo reparim automatik.
+`broker/execution_result.py` perdor `tradeOpened.price` (ose `tradeReduced.price`/`tradesClosed[0].price` per reduktime/mbyllje) kur jepet. `OrderFillTransaction.price` eshte vetem fallback legacy. `fullVWAP` **nuk perdoret** per te krijuar çmim individual tregtie kur mungon prova e sakte; rezultati eshte `UNKNOWN`. Mbeten detyrime klasifikimi per `orderID`, `tradeID`, units dhe lidhjen me `orderCreateTransaction`. `OrderEngine` ben GET per SL/TP/ownership pas fill-it dhe, kur jepet `Trade.price`, e krahason me çmimin per-trade te transaksionit para certifikimit te mbrojtjes. Mospërputhja e çmimit e lë `protection_verified=False`, pa reparim automatik.
 
 ### 3. `sinceid` dhe cursor
 
@@ -39,6 +39,6 @@ Shkrimet e brokerit mbeten te bllokuara edhe nese nje thirrje e nivelit te ulet 
 
 ## Provat dhe kufizimet
 
-`tests/test_phase_b_category06.py` perfshin 19 teste te reja me fake broker, stub HTTP, kontrata te deprekuara/aktuale, mospërputhje te transaksioneve, transport te mbyllur, timeout, dhe test pozitiv te `OrderEngine` me `tradeOpened.price`. Testet ekzistuese te fazave A dhe B duhet te mbeten jeshile. Numri final do te merret nga GitHub CI, jo nga supozimi.
+`tests/test_phase_b_category06.py` perfshin 20 teste te reja me fake broker, stub HTTP, kontrata te deprekuara/aktuale, mospërputhje te transaksioneve, transport te mbyllur, timeout, dhe test pozitiv te `OrderEngine` me `tradeOpened.price`. Testet ekzistuese te fazave A dhe B duhet te mbeten jeshile. Numri final do te merret nga GitHub CI, jo nga supozimi.
 
 **Kufizimet:** teste offline nuk vertetojne autentikimin, specifikat e llogarise, aksesin apo rezultatin e urdhrave te vertete ne OANDA Practice. Pajtimi i plotë BE/partial/close, monitorimi i ndryshimeve te shpejta ne broker dhe provat e NAV historik trajtohen nga kategorite pasuese. Nuk u lexuan dhe nuk u kopjuan kredenciale. Kjo pakete nuk shton/aktivizon asnje mekanizem tregtimi.
