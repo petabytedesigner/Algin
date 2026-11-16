@@ -293,6 +293,10 @@ def build_risk_readiness(
         raise RiskEvidenceError("Completed reconciliation report required")
     if report.blocked_reasons or report.cursor != account.transaction_id:
         reasons.append("BROKER_RECONCILIATION_NOT_COMPLETE")
+    if set(report.owned_open_trades) != {
+        trade.get("id") for trade in broker_trades if isinstance(trade, dict)
+    }:
+        reasons.append("OWNED_BROKER_TRADE_REPORT_MISMATCH")
     exposure, exposure_reasons = _snapshot_exposure(
         account, state, attempts, broker_trades, broker_orders
     )
