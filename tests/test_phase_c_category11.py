@@ -70,9 +70,9 @@ def make_fixture(*, exit_case="TP", total=65):
             mid[i].update(open=1.1026, high=1.1030,
                           low=1.1024, close=1.1027)
     elif exit_case == "BE":
-        mid[60].update(open=1.1026, high=1.1053,
-                       low=1.1024, close=1.1050)
-        mid[61].update(open=1.1050, high=1.1053,
+        mid[60].update(open=1.1026, high=1.1070,
+                       low=1.1024, close=1.1065)
+        mid[61].update(open=1.1065, high=1.1068,
                        low=1.1024, close=1.1034)
         mid[62].update(open=1.1034, high=1.1035,
                        low=1.0970, close=1.0980)
