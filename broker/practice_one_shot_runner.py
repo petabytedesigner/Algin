@@ -176,7 +176,7 @@ def exercise(adapter, *, verify_network=True):
     reduction = (partial_fill or {}).get("tradeReduced")
     if (half.status_code != 200 or not isinstance(reduction, dict)
         or reduction.get("tradeID") != tid
-        or number(reduction.get("units"), "reduction") != Decimal("10")):
+        or number(reduction.get("units"), "reduction") != Decimal("-10")):
         raise DemoBlocked("PARTIAL_OUTCOME_UNVERIFIED_NO_RETRY")
     adapter.transaction(partial_fill.get("id"), "ORDER_FILL")
     adapter.owned_trade(tid, Decimal("10"), stop, target)
@@ -190,7 +190,7 @@ def exercise(adapter, *, verify_network=True):
     closes = (final_fill or {}).get("tradesClosed")
     if (final.status_code != 200 or not isinstance(closes, list)
         or len(closes) != 1 or closes[0].get("tradeID") != tid
-        or number(closes[0].get("units"), "closing units") != Decimal("10")):
+        or abs(number(closes[0].get("units"), "closing units")) != Decimal("10")):
         raise DemoBlocked("FULL_CLOSE_UNVERIFIED_NO_RETRY")
     adapter.transaction(final_fill.get("id"), "ORDER_FILL")
     a = adapter.get("").get("account", {})
