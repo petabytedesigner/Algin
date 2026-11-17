@@ -12,7 +12,7 @@ from analytics.strategy_replay import (
     ReplayAssumptions, ReplayError, replay,
 )
 from analytics.walk_forward import (
-    holdout, cost_sensitivity,
+    holdout, cost_sensitivity, instrument_sensitivity,
 )
 from broker.practice_transport import _PRACTICE_WRITES_RELEASED
 from risk.trade_plan import InstrumentRules
@@ -288,6 +288,28 @@ class FillAndManagementTests(unittest.TestCase):
         self.assertFalse(result.trades[0].be_executed)
         self.assertFalse(result.trades[0].partial_executed)
 
+    def test_tradeable_false_after_open_never_forges_exit_result(self):
+        raw, facts = make_fixture(exit_case="OPEN")
+        facts[raw["candles"][61]["time"]]["broker_tradeable"] = False
+        with patch("analytics.strategy_replay.Strategy", ScriptedStrategy):
+            r = replay(raw, rules(), facts, assumptions=settings())
+        self.assertEqual(r.trades, ())
+        self.assertEqual(r.unresolved, 1)
+        self.assertEqual(r.blocked["OPEN_TRADE_BROKER_UNTRADEABLE"], 1)
+
+    def test_midweek_missing_bar_with_open_position_is_unresolved(self):
+        raw, facts = make_fixture(exit_case="OPEN")
+        for bar in raw["candles"][61:]:
+            old = bar["time"]
+            shifted = iso_utc(parse_utc(old) + timedelta(minutes=15))
+            bar["time"] = shifted
+            facts[shifted] = facts.pop(old)
+        with patch("analytics.strategy_replay.Strategy", ScriptedStrategy):
+            r = replay(raw, rules(), facts, assumptions=settings())
+        self.assertEqual(r.trades, ())
+        self.assertEqual(r.unresolved, 1)
+        self.assertEqual(r.blocked["OPEN_TRADE_PRICE_HISTORY_GAP"], 1)
+
     def test_data_after_signal_cannot_change_earlier_strategy_prefix(self):
         ScriptedStrategy.seen = []
         raw, facts = make_fixture()
@@ -388,6 +410,21 @@ class StatisticalSafeguardTests(unittest.TestCase):
                     "two": replace(different, account_currency="EUR"),
                 },
                 holdout_start=NOW,
+            )
+
+    def test_instrument_sensitivity_uses_independent_capital_and_contracts(self):
+        raw, facts, result = self.sample()
+        with patch("analytics.strategy_replay.Strategy", ScriptedStrategy):
+            out = instrument_sensitivity(
+                {"EUR_USD": (raw, rules(), facts)},
+                assumptions=settings(), holdout_start=NOW-timedelta(minutes=15),
+            )
+        self.assertEqual(out["EUR_USD"]["holdout"].out_of_sample["count"], 1)
+        self.assertFalse(out["EUR_USD"]["holdout"].broker_verified)
+        with self.assertRaises(ReplayError):
+            instrument_sensitivity(
+                {"GBP_USD": (raw, rules(), facts)},
+                assumptions=settings(), holdout_start=NOW,
             )
 
     def test_no_tiny_sample_wilson_inference(self):
