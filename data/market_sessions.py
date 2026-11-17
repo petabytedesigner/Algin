@@ -54,13 +54,23 @@ class MarketSessions:
         """Session schedule only: does NOT attest to live broker tradeability."""
         return self.active_session(now) is not None
 
-    def instrument_tradeable(self, instrument, *, now, broker_tradeable):
-        """P54 require separate verified broker status; never assume market open."""
-        if not isinstance(instrument, str) or instrument.count("_") != 1:
+    def instrument_tradeable(
+        self, instrument, *, now, broker_tradeable, require_session=True
+    ):
+        """Require OANDA status and FX weekly window independently of sessions.
+
+        Disabling optional intraday session hours NEVER disables Friday close,
+        weekend lockout or the independent broker-tradeable gate.
+        """
+        if (not isinstance(instrument, str)
+            or instrument.count("_") != 1
+            or type(require_session) is not bool):
             return False
         # OANDA instrument-specific schedules vary; FX only in this policy.
         base, quote = instrument.split("_")
         fx = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"}
-        if base not in fx or quote not in fx:
+        if base not in fx or quote not in fx or base == quote:
             return False
-        return broker_tradeable is True and self.can_trade(now)
+        if broker_tradeable is not True or not self.market_week_open(now):
+            return False
+        return not require_session or self.can_trade(now)
