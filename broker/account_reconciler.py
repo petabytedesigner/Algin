@@ -120,6 +120,19 @@ class AccountReconciler:
         representation; never classify an arbitrary pending order as protective.
         """
         if not orders:
+            # Preserve the legacy no-ID fixture contract, but reject a full
+            # broker snapshot that references protective order IDs absent
+            # from the actual pending-order inventory.
+            for live in broker_trades.values():
+                for field in (
+                    "stopLossOrder", "takeProfitOrder",
+                    "guaranteedStopLossOrder", "trailingStopLossOrder",
+                ):
+                    if live.get(field + "ID") is not None:
+                        return False
+                    detail = live.get(field)
+                    if isinstance(detail, dict) and detail.get("id") is not None:
+                        return False
             return True
         if len(owned_ids) != len(broker_trades) or len(orders) != 2 * len(owned_ids):
             return False
