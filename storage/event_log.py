@@ -134,7 +134,7 @@ class EventLog:
         established = False
         try:
             with os.fdopen(fd, "w", encoding="ascii") as handle:
-                handle.write(f"pid={os.getpid()} owner={owner}\\n")
+                handle.write(f"pid={os.getpid()} owner={owner}\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             established = True
