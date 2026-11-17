@@ -187,14 +187,22 @@ def main():
     try:
         report = PracticeReadOnlyProbe(expected_account_id=expected).run()
     except PracticeProbeError as exc:
-        # This message contains only our own static diagnostic, never a
-        # requests exception, server payload, token or full account ID.
+        # These are exclusively our own static diagnostics.
         print(json.dumps({
             "status": "PRACTICE_READ_ONLY_FAILED",
             "reason": str(exc),
             "broker_mutations": 0,
         }, sort_keys=True))
         return 2
+    except Exception:
+        # Unexpected errors (including a broker library regression) must
+        # NEVER print raw HTTP exceptions, response bodies, URLs or tokens.
+        print(json.dumps({
+            "status": "PRACTICE_READ_ONLY_FAILED",
+            "reason": "UNEXPECTED_PROBE_ERROR",
+            "broker_mutations": 0,
+        }, sort_keys=True))
+        return 3
     print(json.dumps({
         "status": "PRACTICE_READ_ONLY_VERIFIED",
         "report": report.public(),
