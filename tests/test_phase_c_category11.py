@@ -299,11 +299,16 @@ class FillAndManagementTests(unittest.TestCase):
 
     def test_midweek_missing_bar_with_open_position_is_unresolved(self):
         raw, facts = make_fixture(exit_case="OPEN")
+        shifted_facts = {
+            bar["time"]: facts[bar["time"]]
+            for bar in raw["candles"][:61]
+        }
         for bar in raw["candles"][61:]:
             old = bar["time"]
             shifted = iso_utc(parse_utc(old) + timedelta(minutes=15))
+            shifted_facts[shifted] = facts[old]
             bar["time"] = shifted
-            facts[shifted] = facts.pop(old)
+        facts = shifted_facts
         with patch("analytics.strategy_replay.Strategy", ScriptedStrategy):
             r = replay(raw, rules(), facts, assumptions=settings())
         self.assertEqual(r.trades, ())
