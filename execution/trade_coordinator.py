@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
+import re
 from typing import Callable
 
 import config
@@ -87,11 +88,12 @@ class CoordinationResult:
 
 
 def stable_signal_id(account_id: str, instrument: str, direction: str,
-                     completed_candle: datetime) -> str:
-    """One account/instrument/direction/M15 candle = one lifetime signal ID.
+                     completed_candle: datetime, *, setup_id=None) -> str:
+    """Durable signal identity, optionally stable across retests of one BOS.
 
-    Score, grade, wall-clock retry and process UUID are intentionally absent.
-    Invalid identities are refused rather than silently normalized.
+    An original candle-scoped signal retains its exact historical hash.
+    A strategy-generated setup ID binds subsequent candles to the same
+    account/instrument/direction lifetime ID. Grade and score never appear.
     """
     stamp = require_utc(completed_candle)
     if (not isinstance(account_id, str) or not account_id
@@ -107,8 +109,14 @@ def stable_signal_id(account_id: str, instrument: str, direction: str,
     # different timestamps and defeat durable signal deduplication.
     if stamp.minute % 15 or stamp.second or stamp.microsecond:
         raise ValueError("M15 candle must start on a UTC quarter-hour")
+    if setup_id is not None and (
+        not isinstance(setup_id, str)
+        or re.fullmatch(r"algin-setup-[0-9a-f]{40}", setup_id) is None
+    ):
+        raise ValueError("Invalid BOS setup identifier")
     key = json.dumps(
-        (account_id, instrument, direction, "M15", iso_utc(stamp)),
+        (account_id, instrument, direction, "M15",
+         setup_id if setup_id is not None else iso_utc(stamp)),
         separators=(",", ":"), ensure_ascii=True
     ).encode("ascii")
     return "algin-signal-" + hashlib.sha256(key).hexdigest()[:40]
@@ -254,7 +262,7 @@ class TradeCoordinator:
                 return CoordinationResult("BLOCKED", "CANDLE_ALIGNMENT_INVALID")
             signal_id = stable_signal_id(
                 req.evidence.funds.account_id, req.signal.instrument,
-                req.signal.direction, candle,
+                req.signal.direction, candle, setup_id=req.signal.setup_id,
             )
             gates = req.gates
             for name, verified in (

@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 import math
+import config
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,11 @@ class BreakRetest:
 class BreakoutRetest:
     """A recent confirmed swing is broken by a CLOSE, then retested later."""
 
-    def __init__(self, *, expiry_bars=4, zone_atr=0.20,
+    def __init__(self, *, expiry_bars=None, zone_atr=0.20,
                  max_retest_depth=0.30, break_buffer_atr=0.05):
-        if not isinstance(expiry_bars, int) or not 1 <= expiry_bars <= 12:
+        if expiry_bars is None:
+            expiry_bars = config.MAX_RETEST_BARS
+        if type(expiry_bars) is not int or not 1 <= expiry_bars <= 12:
             raise ValueError("Invalid expiry window")
         if not 0 < zone_atr <= 1 or not 0 < max_retest_depth < 1:
             raise ValueError("Invalid breakout/retest policy")
@@ -50,6 +53,42 @@ class BreakoutRetest:
             ):
                 pivots.append((j, center))
         return pivots
+
+    def _qualifying_retest(self, candle, direction, low_zone, high_zone):
+        """Only the FIRST complete qualifying candle may confirm one BOS.
+
+        This helper uses the same rules for historical and newest candles:
+        later scans of a rolling window cannot confirm the same breakout
+        again on a second favorable candle.
+        """
+        if (direction == "LONG" and candle["close"] <= candle["open"]) or (
+            direction == "SHORT" and candle["close"] >= candle["open"]
+        ):
+            return None
+        if direction == "LONG":
+            touched = candle["low"] <= high_zone and candle["high"] >= low_zone
+            depth = high_zone - candle["low"]
+            confirmed = candle["close"] > high_zone
+        else:
+            touched = candle["high"] >= low_zone and candle["low"] <= high_zone
+            depth = candle["high"] - low_zone
+            confirmed = candle["close"] < low_zone
+        if not touched or not confirmed or depth < 0:
+            return None
+        fraction = depth / (high_zone - low_zone)
+        if fraction > self.max_retest_depth:
+            return None
+        body = abs(candle["close"] - candle["open"])
+        if body <= 0:
+            return None
+        adverse_wick = (
+            min(candle["open"], candle["close"]) - candle["low"]
+            if direction == "LONG" else
+            candle["high"] - max(candle["open"], candle["close"])
+        )
+        if adverse_wick > 3 * body:
+            return None
+        return max(0.0, min(1.0, 1.0 - fraction))
 
     def confirm(self, candles, direction, atr) -> Optional[BreakRetest]:
         if direction not in ("LONG", "SHORT") or len(candles) < 20:
@@ -94,35 +133,22 @@ class BreakoutRetest:
             else:
                 if any(c["close"] > high_zone for c in middle):
                     continue
-            depth_range = high_zone - low_zone
-            if direction == "LONG":
-                touched = final["low"] <= high_zone and final["high"] >= low_zone
-                depth = high_zone - final["low"]
-                confirmed = final["close"] > high_zone
-            else:
-                touched = final["high"] >= low_zone and final["low"] <= high_zone
-                depth = final["high"] - low_zone
-                confirmed = final["close"] < low_zone
-            if not touched or not confirmed or depth < 0:
-                continue
-            fraction = depth / depth_range
-            if fraction > self.max_retest_depth:
-                continue
-            # Reject long manipulation wicks, with zero-body safely excluded.
-            body = abs(final["close"] - final["open"])
-            if body <= 0:
-                continue
-            adverse_wick = (
-                min(final["open"], final["close"]) - final["low"]
-                if direction == "LONG" else
-                final["high"] - max(final["open"], final["close"])
+            quality = self._qualifying_retest(
+                final, direction, low_zone, high_zone
             )
-            if adverse_wick > 3 * body:
+            if quality is None:
+                continue
+            # The same breakout must not produce a new signal for each
+            # subsequent retest candle. Historical bars are all CLOSED and
+            # use the identical qualifying test; no future data is consumed.
+            if any(self._qualifying_retest(
+                prior, direction, low_zone, high_zone
+            ) is not None for prior in middle):
                 continue
             return BreakRetest(
                 direction=direction, breakout_index=k,
                 pivot_index=pivot_idx, pivot_price=level,
                 zone_low=low_zone, zone_high=high_zone,
-                retest_quality=max(0.0, min(1.0, 1.0 - fraction))
+                retest_quality=quality
             )
         return None

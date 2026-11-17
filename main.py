@@ -210,7 +210,8 @@ def _scan_once(cycle: str) -> int:
         # Do not consume the candle when the instrument is not tradeable.
         quote = data.get_price(instrument)
         if not MarketSessions().instrument_tradeable(
-            instrument, now=now, broker_tradeable=quote is not None
+            instrument, now=now, broker_tradeable=quote is not None,
+            require_session=config.ENABLE_SESSIONS,
         ):
             LOG.info("%s: instrument not verified tradeable", instrument)
             record("ENTRY_DENIED","QUOTE_OR_SESSION_UNVERIFIED",instrument=instrument)
