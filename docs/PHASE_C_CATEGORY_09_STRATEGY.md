@@ -16,7 +16,8 @@ Kategoria 09 trajton (a) identitetin e breakout/retest dhe lidhjen e tij me BOS/
 
 - `BreakoutRetest()` lexon `config.MAX_RETEST_BARS` në inicializim. Nuk ekziston më konstanta paralele `expiry_bars=4` në `Strategy`; kontrata ruan vlerën e projektit `4`, por respekton ndryshimet e ardhshme të konfigurimit. Vlera duhet të jetë integer 1–12, jo boolean.
 - Një breakout mund të konfirmohet vetëm nga **qiriri i parë** i retest-it që plotëson kushtet për drejtimin, prekjen, thellësinë dhe wick-un. Nëse një qiri historik ka konfirmuar tashmë të njëjtin setup, qirinjtë e mëvonshëm nuk japin sinjal të ri për të njëjtin breakout. Kjo është logjikë deterministe mbi historikun e mbyllur, pa state të fshehtë.
-- `CandleGate` dhe ID-të e sinjaleve në `TradeCoordinator` mbeten të pandryshuara, si shtresë e dytë kundër përsëritjes. Nuk ka retry të porosive.
+- `StrategySignal.setup_id` është një fushë e re **opsionale** dhe e llogaritur nga `instrument`, `direction`, koha UTC e pivot-it dhe koha UTC e breakout-it. Nuk varet nga indekset e dritares historike ose koha e retest-it. `TradeCoordinator` e përdor këtë identitet (kur ekziston dhe ka format të saktë) për të derivuar një `signal_id` të përhershëm në journal, që nuk ndryshon mes qirinjve pasues të të njëjtit breakout. Sinjalet e vjetra pa `setup_id` ruajnë **pikërisht hash-in ekzistues** të bazuar te qiriri M15; nuk migrohen apo riemërtohen sinjale të ruajtura.
+- `CandleGate` vazhdon të bllokojë skanimin e dyfishtë të qiririt të njëjtë. Idempotenca e journal-it është shtresa e dytë për të njëjtin setup midis qirinjve. Nuk ka retry të porosive.
 
 **Trade-off:** nëse retest-i i parë kalon konfirmimin teknik por sinjali përfundimtar refuzohet nga një filtër tjetër, një retest i dytë i të njëjtit breakout gjithashtu nuk jep sinjal. Është sjellje konservative, jo një supozim se filtri i parë u ekzekutua.
 
@@ -34,6 +35,8 @@ Ky kontroll nuk është verifikim i kalendarit specifik të tregtimit në OANDA;
 
 ## 6. Testimi dhe kriteret e pranimit
 
-`tests/test_phase_c_category09.py` shton 16 teste deterministe me fixtures offline: përputhjen e pivot/BOS për LONG/SHORT, skadim konfigurimi, retest i dyfishtë, mutacione të të dhënave të ardhshme pa lookahead (100 raste me seed), metrikat e detyrueshme dhe kufijtë A/B/C/D, ruajtjen e sinjalit ekzistues pozitiv, ndarjen e sesionit nga mbyllja javore dhe verifikimi i kuotës.
+`tests/test_phase_c_category09.py` shton 21 teste deterministe me fixtures offline: përputhjen e pivot/BOS për LONG/SHORT, skadim konfigurimi, retest i dyfishtë, mutacione të të dhënave të ardhshme pa lookahead (100 raste me seed), metrikat e detyrueshme dhe kufijtë A/B/C/D, ruajtjen e sinjalit ekzistues pozitiv, ndarjen e sesionit nga mbyllja javore dhe verifikimi i kuotës.
+
+Testet shtesë sigurojnë se `setup_id` mbetet identik kur dritarja historike lëviz, se journal-i refuzon një sinjal të dytë nga i njëjti BOS, se hash-i legacy nuk ndryshon, dhe se koordinatori e përdor identitetin e ri në planifikimin e tij offline.
 
 Kategoria pranohet kur ekzekutohet suita e plotë në GitHub Actions, `main.py --check` kalon, sigurohet scope-i i skedarëve dhe merge-i bëhet me SHA të pritur. **Offline PASS nuk garanton sukses të strategjisë ose sjellje identike nga data-feed real**; këto verifikohen në Kategoritë 10–13.
