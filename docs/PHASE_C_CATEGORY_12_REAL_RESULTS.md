@@ -1,10 +1,21 @@
 # Faza C — Kategoria 12: Rezultatet empirike nga OANDA Practice
 
-**Status faktik:** autentikimi, katalogu, kuota, hapja reale me SL/TP dhe
-mbyllja e pjesshme janë verifikuar kundrejt OANDA Practice. **Mbyllja e
-plotë dhe Break-Even NUK janë përfunduar.** Në snapshot-in e fundit të
-autentikuar (2026-11-17 02:43:19 UTC) mbeteshin 10 njësi EUR_USD LONG,
-me dy urdhra mbrojtës. Ky dokument nuk e klasifikon llogarinë si flat.
+**Status faktik i përditësuar më 17 nëntor 2026:** lidhja
+e mëparshme e autentikuar, hapja reale e një tregtie me SL/TP dhe
+reduktimi i pjesshëm janë provuar nga OANDA. **Përdoruesi ka raportuar
+më pas mbylljen manuale të 10 njësive të mbetura me +9.0 pip në momentin
+e mbylljes.** Ky informacion është deklaratë e pronarit, jo një
+`ORDER_FILL` i verifikuar nga API. Prova e fundit e suksesshme
+në 02:43:19 UTC tregonte ende 10 njësi LONG; kjo është një fotografi
+historike, **jo gjendja aktuale e pohuar**.
+
+Auditimi i ri GET-only është implementuar dhe testuar, por OANDA
+ktheu **HTTP 401** në dy endpoint-e autentikimi më 17 nëntor
+2026 rreth orës 03:27 UTC. Për këtë arsye mbyllja finale,
+P/L neto dhe anulimi i SL/TP nuk mund të certifikohen ende nga
+përgjigjet aktuale të brokerit. Nuk u dërgua asnjë porosi e re.
+Faza 12 ka **implementim dhe testim të zgjeruar**, por verifikimi
+operacional i mbylljes dhe BE reale mbeten të papërfunduara.
 
 ## 1. Prova e autentikuar e llogarisë
 
@@ -69,14 +80,11 @@ run 44005031533](https://github.com/petabytedesigner/Algin/actions/runs/44005031
 | NAV | `9999.9987 USD` |
 | lastTransactionID | `10` |
 
-**Nuk u verifikua mbyllje e plotë.** Përpjekja për të iniciuar një
-workflow të ri rikuperimi u bllokua para dërgimit të një kërkese
-tjetër; prandaj s'ka evidencë transaksioni full-close. Mos e
-interpreto `CI PASS` ose `HTTP 200` të partial-close si
-mbyllje të pozicionit. Për të shmangur ekspozimin, pronari mund
-të mbyllë **Trade ID 6, të gjitha 10 njësitë**, përmes ndërfaqes
-Practice të OANDA-s dhe të verifikojë `openTradeCount=0`.
-Kjo nuk kërkon konfigurime në GitHub.
+**Më pas përdoruesi deklaroi se e mbylli manualisht tregtinë** me
+`+9.0 pips` për pjesën e mbetur. Prandaj udhëzimi i mëparshëm për
+mbyllje nuk është më veprim i kërkuar. Mbetet vetëm verifikimi read-only
+i mbylljes së raportuar, numrit të pozicioneve/urdhrave dhe P/L neto.
+Asnjë urdhër tjetër nuk duhet nisur vetëm mbi këtë snapshot të vjetër.
 
 ## 5. Kufijtë e këtij PR-je
 
@@ -94,3 +102,27 @@ Ky test nuk mat win-rate, profitabilitet, BE të suksesshëm,
 financimin neto të të gjithë ciklit apo forward-testing 24/7.
 Kategoria 12 mbetet **pjesërisht e përfunduar** derisa të provohet
 flat account dhe cikli i menaxhimit/financimit.
+
+## 6. Auditimi i mbylljes manuale dhe HTTP 401
+
+- [Run 44010127960](https://github.com/petabytedesigner/Algin/actions/runs/44010127960): **15/15 teste offline PASS**; kontrolli real GET u bllokua nga përgjigje jo-200.
+- [Run 44010242985](https://github.com/petabytedesigner/Algin/actions/runs/44010242985): diagnostikim vetëm me URL të kontrolluara në kod; `GET /accounts/{id}` ktheu **HTTP 401**.
+- [Run 44010354053](https://github.com/petabytedesigner/Algin/actions/runs/44010354053): `GET /v3/accounts` i OANDA Practice ktheu **HTTP 401** dhe `GET /v3/accounts/{id}` ktheu **HTTP 401**. Kjo tregon se autorizimi aktual me token-in ekzistues nuk po pranohet as për listën e llogarive. Shkaku i saktë (token i pavlefshëm, i revokuar, ose refuzim nga shërbimi) **nuk përcaktohet vetëm nga 401**.
+- SHA e blob-it të `.env.example` në GitHub mbeti e pandryshuar krahasuar me commit-in e provës së mëparshme të suksesshme. Token-i nuk u printua dhe skedari nuk u ndryshua.
+
+`broker/practice_close_audit.py` është një auditues **GET-only** që:
+1. Kërkon inventar llogarie pa tregti dhe pa urdhra të hapur, USD dhe ID të saktë.
+2. Kërkon `GET /trades/6` me `state=CLOSED`, `currentUnits=0`, identitetin e trade-it dhe kohën e mbylljes.
+3. Verifikon `GET /transactions/sinceid?id=10`, transaksionet `6` (OPEN), `10` (PARTIAL, `units=-10`) dhe ID-në terminale `ORDER_FILL` me `tradesClosed` në të njëjtën tregti.
+4. Pajton `Trade.realizedPL` me shumën e `tradeReduced.realizedPL` dhe `tradesClosed.realizedPL`; raporton veçmas `financing`, `commission`, bilancin dhe ndryshimin nga referenca `$10,000`.
+5. **Nuk e paraqet** ndryshimin e bilancit si neto të atribuueshme vetëm tregtisë dhe nuk supozon kosto zero kur fusha mungon.
+
+Në këtë version nuk ka urdhra të rinj, retry të mutacioneve, ndryshim të
+`main.py`, release të transportit real apo ndryshim të riskut. Kalimi i
+testeve nuk zëvendëson provën e mbylljes në OANDA.
+
+**Përfundim i auditimit:** hapja e pozicionit dhe reduktimi janë
+`BROKER_CONFIRMED`; mbyllja finale është `USER_REPORTED_API_UNVERIFIED`.
+BE real nuk është provuar, sepse kushti i çmimit nuk u realizua gjatë
+eksperimentit. Statusi i Kategorisë 12 për të dy pikat mbetet
+`BLOCKED_EXTERNAL_EVIDENCE`, jo `PASS`.
