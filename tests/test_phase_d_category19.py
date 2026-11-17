@@ -160,8 +160,15 @@ class FmpNewsFilterIntegrationTests(unittest.TestCase):
         self.legacy.start()
         self.addCleanup(self.static.stop)
         self.addCleanup(self.legacy.stop)
+        self.current_clock = NOW
+        self.wall_clock = patch(
+            "data.news_filter.utc_now", side_effect=lambda: self.current_clock
+        )
+        self.wall_clock.start()
+        self.addCleanup(self.wall_clock.stop)
 
     def news(self, raw_rows, *, now=NOW):
+        self.current_clock = now
         def fake_get(*args, **kwargs):
             return Response(raw_rows)
         with patch.dict(os.environ, {"FMP_API_KEY": KEY}), patch(
