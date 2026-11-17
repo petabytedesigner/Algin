@@ -99,7 +99,20 @@ class PracticeCloseAuditor:
             raise CloseAuditError("Broker GET failed; no outcome assumed") from None
         if (not isinstance(result, BrokerReply) or result.status_code != 200
             or not isinstance(result.body, dict)):
-            raise CloseAuditError("Broker GET status/body not authoritative")
+            # The path is an internal allow-listed GET endpoint: safe to
+            # report for diagnosis. Never include server JSON, token or URL.
+            safe_path = (
+                path if path in ("", "/trades/6", "/transactions/sinceid",
+                                 "/transactions/6", "/transactions/10")
+                or path.startswith("/transactions/") and
+                    path.removeprefix("/transactions/").isdecimal()
+                else "OTHER_ENDPOINT"
+            )
+            status = result.status_code if isinstance(result, BrokerReply) else "NO_REPLY"
+            raise CloseAuditError(
+                "Broker GET unavailable at " + (safe_path or "ACCOUNT")
+                + " HTTP=" + str(status)
+            )
         return result.body
 
     def _one_tx(self, tid):
