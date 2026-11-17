@@ -106,12 +106,18 @@ def fetch_fmp_calendar(*, api_key, now, http_get=None):
         if unique in seen:
             raise FmpCalendarError("Duplicate FMP calendar event")
         seen.add(unique)
-        events.append({
-            "time": iso_utc(when),
-            "currency": currency,
-            "impact": _IMPACTS[impact.casefold()],
-            "title": title.strip(),
-        })
+        # FMP's global calendar also includes currencies outside Algin's FX
+        # universe. Validate every row first; only then exclude unrelated
+        # valid currencies from the NewsFilter contract.
+        if currency in MAJOR_FX_CURRENCIES:
+            events.append({
+                "time": iso_utc(when),
+                "currency": currency,
+                "impact": _IMPACTS[impact.casefold()],
+                "title": title.strip(),
+            })
+    if not events:
+        raise FmpCalendarError("No major-FX economic calendar evidence")
 
     return {
         "events": events,
