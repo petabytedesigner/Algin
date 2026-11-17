@@ -80,6 +80,17 @@ class DependentOrderInventoryTests(LifecycleFixture):
         self.assertFalse(report.blocked_reasons)
         self.assertEqual(self.transport.orders, [])
 
+    def test_explicit_protective_order_ids_without_pending_inventory_block(self):
+        self.bootstrap()
+        self.attach_protections()
+        self.transport.orders = []
+        self.assert_untrusted_inventory()
+        self.assertEqual(self.store.load()["cursor"], "100")
+        # Even if a nested ID is missing, its TradeSummary ID must not be
+        # ignored when the full account reports no pending orders.
+        del self.transport.trades[0]["stopLossOrder"]["id"]
+        self.assert_untrusted_inventory()
+
     def test_foreign_or_changed_pending_order_never_whitelisted(self):
         self.bootstrap()
         self.attach_protections()
