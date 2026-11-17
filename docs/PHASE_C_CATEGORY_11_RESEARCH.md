@@ -36,13 +36,13 @@ Sinjali analizohet **pas mbylljes** së qiririt i; hyrja më e hershme është *
 
 `BE_PARTIAL` ripërdor `TradeRecord.break_even_target` dhe `partial_close_units` me pragun ekzistues **1R** dhe fraction **50%**. Trigger merret vetëm nga close i një bari të mbyllur. Veprimi i synuar mund të materializohet vetëm në **open-in pasues**, pas kontrollit të gap/SL; nëse kushti 1R nuk vlen më, nuk simulohet ndryshim. Kjo është hipotezë për latency, jo emulim i vërtetë i request/response apo journal.
 
-Modelet `HOLD` dhe `BE_PARTIAL` llogariten si rrugë të pavarura — ndikimi i partial në risk, njësi, P/L dhe sekuencën e tregtimeve **nuk** nxirret duke transformuar thjesht fitimin e regjistruar.
+Modelet `HOLD` dhe `BE_PARTIAL` llogariten si rrugë të pavarura — ndikimi i partial në risk, njësi, P/L dhe sekuencën e tregtimeve **nuk** nxirret duke transformuar thjesht fitimin e regjistruar. Nëse gjatë një tregtie brokeri figuron `tradeable=False` ose ka interval M15 të munguar, rezultati shënohet `OPEN_UNRESOLVED`, jo TP/SL i improvizuar.
 
 **Jo-paritetet operative të njohura:** mbetet vetëm një pozicion i hapur për instrument/ekzekutim replay; përdoret NAV e realizuar, jo mark-to-market intrabar; margin është input sintetik; nuk ka liquidity tiers, order-book depth, volume constraints, limit order queue, requote, partial fills në hyrje, shpenzime reale rollover/swap, evente asinkrone manuale apo reconciler/journal brokeri. Këto bëjnë që replay të jetë **production-contract-aligned**, por **jo production-equivalent**. Ndryshimi i parametrave në këtë modul nuk i ndryshon limitet e kodit operacional.
 
 ## 4. Protokolli i ndarjes kohore
 
-`analytics/walk_forward.py` jep `holdout` me një ndarje UTC të vendosur paraprakisht; përdor **entry time** për testin jashtë kampionit. Tregtitë e hapura para ndarjes dhe të mbyllura më pas përjashtohen (`purged_cross_boundary`), jo numërohen në të dyja partitë. `cost_sensitivity` ekzekuton nga fillimi secilin skenar të përcaktuar shprehimisht; nuk bën kërkim parametrash ose tuning mbi holdout.
+`analytics/walk_forward.py` jep `holdout` me një ndarje UTC të vendosur paraprakisht; përdor **entry time** për testin jashtë kampionit. Tregtitë e hapura para ndarjes dhe të mbyllura më pas përjashtohen (`purged_cross_boundary`), jo numërohen në të dyja partitë. `cost_sensitivity` ekzekuton nga fillimi secilin skenar të përcaktuar shprehimisht; nuk bën kërkim parametrash ose tuning mbi holdout. `instrument_sensitivity` krahason disa instrumente **si backtest-e të pavarura me të njëjtin kapital hipotetik fillestar**, pa mbledhur rezultatet në një portofol të rremë.
 
 Raportohen numri i tregtimeve, P/L neto, drawdown i realizuar, win-rate, expectancy, profit factor, net-R, ndarja A/B dhe instrumenti. Intervali Wilson 95% për win-rate shfaqet **vetëm kur n ≥ 30**; edhe atëherë `statistically_validated_edge=False`, sepse indepenca e tregtimeve, përzgjedhja e instrumenteve, qëndrueshmëria e strategjisë dhe kalibrimi real i kostove nuk janë vërtetuar.
 
@@ -50,11 +50,11 @@ Raportohen numri i tregtimeve, P/L neto, drawdown i realizuar, win-rate, expecta
 
 ## 5. Testet dhe kriteret e pranimit
 
-`tests/test_phase_c_category11.py` ka 24 teste offline për:
+`tests/test_phase_c_category11.py` ka 27 teste offline për:
 - kërkesën e mid/bid/ask, sinjale mbi historik të mbyllur, data të pandryshuara nga qirinjtë e ardhshëm;
 - ndalim të inputeve që mungojnë, qirinjtë e paplotë, kurset e konvertimit të panjohur, spread/precision/gap dhe news provider të munguar;
 - skenarë sintetike TP, SL-first, komision/slippage, BE/partial 1R, pozicion të pambyllur që **nuk** shndërrohet në fitim;
-- ndarje train/test, purge të tregtisë që kalon kufirin, A/B dhe instrument, sample-size dhe skenarë kosto të llogaritur në mënyrë të pavarur.
+- ndarje train/test, purge të tregtisë që kalon kufirin, A/B dhe instrument, sample-size dhe skenarë kosto të llogaritur në mënyrë të pavarur; pozicione të pambyllura kur kuotat nuk janë tregtueshme ose kanë gap, dhe krahasim instrumentesh pa netting kapitali.
 
 `test_phase_c_category11.py` përdor një `ScriptedStrategy` **vetëm në testet e ekzekutimit** për të prodhuar raste të kontrollueshme. Prova e veçantë pa patch thërret `Strategy` reale; asnjë nga këto rezultate nuk është evidencë profitabiliteti.
 
