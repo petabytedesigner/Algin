@@ -488,6 +488,9 @@ class NewsTests(unittest.TestCase):
                 sessions.return_value.instrument_tradeable.side_effect = (
                     lambda *args, **kw: kw["broker_tradeable"]
                 )
+                data.return_value.get_account_instruments.return_value = {
+                    "EUR_USD": rules
+                }
                 data.return_value.get_candles.side_effect = (
                     lambda symbol, *args:
                     candles() if symbol == "EUR_USD" else None
