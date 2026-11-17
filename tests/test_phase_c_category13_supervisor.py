@@ -67,12 +67,14 @@ class FakeHeartbeat:
         self.reason = "NONE"
         self.pid_override = None
         self.stale_seconds = 0
+        self.fixed_stamp = None
         self.unavailable = False
 
     def read(self):
         if self.unavailable:
             raise HeartbeatError("Synthetic missing/corrupt")
-        stamp = self.clock.now() - timedelta(seconds=self.stale_seconds)
+        stamp = (self.fixed_stamp if self.fixed_stamp is not None
+                 else self.clock.now() - timedelta(seconds=self.stale_seconds))
         return {
             "version": 1, "timestamp": iso_utc(stamp),
             "pid": self.pid_override or self.child.pid,
@@ -167,7 +169,14 @@ class ForwardSupervisorTests(unittest.TestCase):
         self.assertEqual(self.history()["healthy_samples"],0)
 
     def test_stale_heartbeat_causes_no_restart(self):
-        self.hb.stale_seconds=220
+        # A heartbeat created by THIS child at startup, followed by a
+        # deliberate 240-second lapse, is stale. A pre-launch heartbeat
+        # is separately classified as OLD, not as same-process liveness.
+        self.hb.fixed_stamp = NOW
+        self.clock.sleep = lambda seconds: setattr(
+            self.clock, "value",
+            self.clock.value + timedelta(seconds=240),
+        )
         self.assertEqual(self.watch(max_age=180),3)
         self.assertEqual(self.history()["recent_block_reason"],
                          "STALE_HEARTBEAT")
