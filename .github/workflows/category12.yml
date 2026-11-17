@@ -1,0 +1,58 @@
+name: Category 12 OANDA Practice read-only evidence
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify disabled broker write gates
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: Practice probe contract tests (no credentials)
+        run: python -m unittest discover -s tests -p 'test_phase_c_category12.py' -v
+
+  authenticated-practice-read:
+    # This job must NEVER run with secrets on a PR's untrusted code.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned runtime dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify actual Practice account with GET only
+        env:
+          OANDA_API_TOKEN: ${{ secrets.OANDA_PRACTICE_API_TOKEN }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_PRACTICE_ACCOUNT_ID }}
+          OANDA_PRACTICE_EXPECTED_ACCOUNT_ID: 101-001-37674492-003
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${OANDA_API_TOKEN}" || -z "${OANDA_ACCOUNT_ID}" ]]; then
+            echo "AUTHENTICATED_PRACTICE_PROBE_NOT_RUN: GitHub Actions secrets are absent"
+            echo "No real account data verified; no broker mutation attempted"
+            exit 0
+          fi
+          # No .env.example sourcing, no request debug logging, and no echo
+          # of token or full account ID. This CLI performs GET only.
+          python -m broker.practice_readonly_probe
