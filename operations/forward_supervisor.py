@@ -128,7 +128,11 @@ class ExclusiveSupervisor:
 
 
 def _new_runtime_log(journal):
-    path = journal.path.with_suffix(".runtime.log")
+    root = journal.path.parent.parent / "forward-logs"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if root.is_symlink():
+        raise ForwardBlocked("RUNTIME_LOG_DIRECTORY_SYMLINK")
+    path = root / (journal.run_id + ".log")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -255,7 +259,7 @@ class ForwardSupervisor:
                         journal.emit("STOP", "SAMPLE_WINDOW_COMPLETE",
                                      pid=proc.pid, now=self.clock())
                         return 0
-                    if output.tell() > 16 * 1024 * 1024:
+                    if os.fstat(output.fileno()).st_size > 16 * 1024 * 1024:
                         journal.emit("BLOCKED", "RUNTIME_LOG_SIZE_LIMIT",
                                      pid=proc.pid, now=self.clock())
                         return 3
