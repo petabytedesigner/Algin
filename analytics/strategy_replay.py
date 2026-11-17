@@ -160,7 +160,10 @@ def _side(raw, rules, *, label):
     for name in ("o", "h", "l", "c"):
         if name not in raw:
             raise ReplayError("Missing historical OHLC price")
-        x = dec(raw[name], name)
+        try:
+            x = dec(raw[name], name)
+        except BacktestError as exc:
+            raise ReplayError("Nonfinite or invalid executable OHLC") from exc
         if x <= 0 or x != x.quantize(rules.price_step):
             raise ReplayError("Invalid executable candle precision")
         points[name] = x
@@ -207,7 +210,11 @@ def _facts(evidence, key):
     if not isinstance(fact, dict):
         raise ReplayError("Missing historical broker/conversion evidence")
     for k in ("loss_to_home", "gain_to_home", "base_value_to_home"):
-        if k not in fact or dec(fact[k], k) <= 0:
+        try:
+            verified = dec(fact[k], k)
+        except (KeyError, BacktestError) as exc:
+            raise ReplayError("Missing or nonfinite historical conversion") from exc
+        if verified <= 0:
             raise ReplayError("Nonpositive/missing historical conversion")
     if type(fact.get("broker_tradeable")) is not bool:
         raise ReplayError("Historical broker-tradeability not attested")
