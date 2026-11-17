@@ -163,3 +163,31 @@ def cost_sensitivity(payload, rules, evidence, *, scenarios, holdout_start,
             ),
         }
     return result
+
+def instrument_sensitivity(datasets, *, assumptions, holdout_start,
+                           min_sample=30):
+    """Independently replay each named FX instrument under one frozen policy.
+
+    Each instrument receives the SAME hypothetical starting capital. Results
+    are never summed into a fictional jointly funded portfolio or risk budget.
+    """
+    if (not isinstance(datasets, dict) or not 1 <= len(datasets) <= 20
+        or not isinstance(assumptions, ReplayAssumptions)):
+        raise ReplayError("Explicit, bounded instrument datasets required")
+    summary = {}
+    for name, bundle in sorted(datasets.items()):
+        if (not isinstance(name, str) or not name
+            or not isinstance(bundle, tuple) or len(bundle) != 3):
+            raise ReplayError("Malformed per-instrument research input")
+        payload, rules, evidence = bundle
+        if getattr(rules, "instrument", None) != name:
+            raise ReplayError("Instrument metadata cannot be interchanged")
+        result = replay(payload, rules, evidence, assumptions=assumptions)
+        summary[name] = {
+            "replay": result,
+            "holdout": holdout(
+                result, starting_equity=assumptions.starting_equity,
+                holdout_start=holdout_start, min_sample=min_sample,
+            ),
+        }
+    return summary
