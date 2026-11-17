@@ -1,0 +1,29 @@
+name: Category 11 historical research replay (offline)
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile replay modules
+        run: python -m compileall -q analytics tests/test_phase_c_category11.py
+      - name: Verify independent broker write locks
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: Full offline test suite
+        run: python -m unittest discover -s tests -v
+      - name: Observe-only application check
+        run: python main.py --check
