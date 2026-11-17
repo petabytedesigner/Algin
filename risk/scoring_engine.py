@@ -77,7 +77,11 @@ class ScoringEngine:
             if metric == "liquidity_sweep" and metrics.get(metric) is None:
                 # An unimplemented optional measurement is not a zero signal.
                 continue
-            value = self._metric(metrics.get(metric, 0.0), metric)
+            if metric not in metrics:
+                # Required measurements cannot silently masquerade as zero;
+                # such a score could change the Grade A/B/C tradeability gate.
+                raise ValueError("Missing verified " + metric + " metric")
+            value = self._metric(metrics[metric], metric)
             numerator += value * weight
             denominator += weight
         if denominator <= 0:
