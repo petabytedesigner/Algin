@@ -70,6 +70,7 @@ class FakeHeartbeat:
         self.fixed_stamp = None
         self.unavailable = False
         self.read_calls = 0
+        self.cycle_id_override = None
 
     def read(self):
         self.read_calls += 1
@@ -81,7 +82,8 @@ class FakeHeartbeat:
             "version": 1, "timestamp": iso_utc(stamp),
             "pid": self.pid_override or self.child.pid,
             "state": self.state, "reason_code": self.reason,
-            "cycle_id": "synthetic",
+            "cycle_id": (self.cycle_id_override if self.cycle_id_override is not None
+                         else f"synthetic-{self.read_calls}"),
         }
 
     def inspect(self, *, now, max_age_seconds):
@@ -136,6 +138,9 @@ class ForwardSupervisorTests(unittest.TestCase):
         self.assertEqual(self.spawned[0]["cwd"],str(self.root))
         self.assertEqual(self.child.terminations,1)
         self.assertEqual(self.history()["healthy_samples"],3)
+        self.assertEqual(self.history()["completed_cycle_samples"],3)
+        self.assertEqual(self.history()["liveness_samples"],0)
+        self.assertEqual(self.history()["broker_verified_cycles"],0)
         self.assertEqual(self.history()["completed_runs"],1)
         self.assertFalse((self.root/".local"/"forward-supervisor.lock").exists())
         logs=list((self.root/".local"/"forward-logs").glob("*.log"))
