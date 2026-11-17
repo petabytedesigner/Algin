@@ -187,21 +187,24 @@ class ForwardSupervisor:
             snapshot = self.heartbeat.read()
             stamp = parse_utc(snapshot["timestamp"])
             now = self.clock()
+            # Inspect the *same* already-validated Heartbeat.read snapshot.
+            # A second read could race with another process replacing the
+            # file, accepting state from a different PID (TOCTOU).
+            if stamp > now + timedelta(seconds=5):
+                return "BLOCKED", "FUTURE_HEARTBEAT", -1
             if stamp < started - timedelta(seconds=5):
                 return "PENDING", "OLD_HEARTBEAT", -1
             if snapshot["pid"] != proc.pid:
                 return "BLOCKED", "FOREIGN_HEARTBEAT", -1
-            health = self.heartbeat.inspect(
-                now=now, max_age_seconds=self.max_age
-            )
-            if health["health"] == "STALE":
-                return "BLOCKED", "STALE_HEARTBEAT", health["age_seconds"]
-            if health["state"] == "BLOCKED":
-                if health["reason_code"] in NO_TRADE_GATE:
-                    return "GATE", health["reason_code"], health["age_seconds"]
-                return "BLOCKED", "BOT_" + health["reason_code"], health["age_seconds"]
-            if health["state"] in ("ACTIVE", "CYCLE_COMPLETE"):
-                return "SAMPLE", health["state"], health["age_seconds"]
+            age_seconds = max(0, int((now - stamp).total_seconds()))
+            if age_seconds > self.max_age:
+                return "BLOCKED", "STALE_HEARTBEAT", age_seconds
+            if snapshot["state"] == "BLOCKED":
+                if snapshot["reason_code"] in NO_TRADE_GATE:
+                    return "GATE", snapshot["reason_code"], age_seconds
+                return "BLOCKED", "BOT_" + snapshot["reason_code"], age_seconds
+            if snapshot["state"] in ("ACTIVE", "CYCLE_COMPLETE"):
+                return "SAMPLE", snapshot["state"], age_seconds
             return "BLOCKED", "INVALID_HEARTBEAT_STATE", -1
         except HeartbeatError:
             return "PENDING", "HEARTBEAT_UNAVAILABLE", -1
