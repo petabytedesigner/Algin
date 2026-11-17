@@ -1,0 +1,34 @@
+name: Category 8 operational resilience and coverage
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  resilient-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime plus isolated test coverage
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install 'coverage>=7.5,<8'
+      - name: Compile offline runtime
+        run: python -m compileall -q .
+      - name: Verify independent broker write locks
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: All tests with branch coverage
+        run: python -m coverage run --branch -m unittest discover -s tests -v
+      - name: Report core operational module coverage
+        run: |
+          python -m coverage report --include='storage/event_log.py,storage/heartbeat.py,storage/lifecycle_state.py,storage/intent_journal.py,broker/account_reconciler.py,execution/offline_management_engine.py' --fail-under=70
+      - name: Observe-only configuration check
+        run: python main.py --check
