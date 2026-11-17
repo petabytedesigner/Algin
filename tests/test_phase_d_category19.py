@@ -241,6 +241,22 @@ class FmpNewsFilterIntegrationTests(unittest.TestCase):
             self.assertIn("NEWS_UNKNOWN", result)
             self.assertEqual(get.call_count, 2)
 
+    def test_provider_uses_exact_evaluation_time_not_later_wall_clock(self):
+        # A network GET may begin after the next UTC second; never turn
+        # valid calendar evidence into a future-timestamp false unknown.
+        with patch.dict(os.environ, {"FMP_API_KEY": KEY}), patch(
+            "data.news_filter.utc_now",
+            return_value=NOW + timedelta(hours=3)
+        ), patch(
+            "data.economic_calendar_fmp.requests.get",
+            return_value=Response([event(when=NOW)])
+        ):
+            self.assertIn(
+                "HIGH-impact lockout", NewsFilter().block_trading("EUR_USD", NOW)
+            )
+        from data.news_filter import _FETCH_REFERENCE_TIME
+        self.assertIsNone(_FETCH_REFERENCE_TIME.get())
+
     def test_api_key_switch_invalidates_cache_without_exposing_secrets(self):
         news = NewsFilter()
         get_reply = Response([event(impact="Low")])
