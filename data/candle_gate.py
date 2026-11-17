@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 
 from utils.time_tools import parse_utc
 
@@ -88,24 +89,60 @@ class CandleGate:
         if stamp.second or stamp.microsecond or stamp.minute % 15:
             raise CandleGateError("Not a M15 boundary")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        owner = secrets.token_hex(24)
+        proof = f"pid={os.getpid()} owner={owner}"
         try:
             fd = os.open(str(self.lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError as exc:
             raise CandleGateError("Concurrent or orphaned checkpoint lock") from exc
+        except OSError as exc:
+            raise CandleGateError("Cannot acquire checkpoint lock") from exc
+
+        # If initialization/fsync fails, leave the lock for manual recovery:
+        # durable ownership was never established.
+        established = False
         try:
-            with os.fdopen(fd, "w") as handle:
-                handle.write(str(os.getpid()))
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                identity = os.fstat(handle.fileno())
+                handle.write(proof + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            established = True
+
+            def require_ownership():
+                try:
+                    current = self.lock.lstat()
+                    if (not stat.S_ISREG(current.st_mode)
+                        or (current.st_dev, current.st_ino)
+                            != (identity.st_dev, identity.st_ino)
+                        or self.lock.read_text(encoding="ascii").strip() != proof):
+                        raise CandleGateError(
+                            "Checkpoint lock ownership changed; manual recovery required"
+                        )
+                except (OSError, UnicodeError) as exc:
+                    raise CandleGateError(
+                        "Cannot verify checkpoint lock ownership"
+                    ) from exc
+
+            require_ownership()
             data = self._read()
+            require_ownership()
             prior = data["last"].get(instrument)
             if prior is not None and stamp <= parse_utc(prior):
                 return False
             data["last"][instrument] = stamp.isoformat().replace("+00:00", "Z")
+            require_ownership()
             self._write(data)
+            require_ownership()
             return True
         finally:
-            try:
-                self.lock.unlink()
-            except OSError:
-                pass
+            if established:
+                # Never unlink a replaced/tampered lock. A lost-ownership
+                # result is UNKNOWN, not permission to retry the candle.
+                require_ownership()
+                try:
+                    self.lock.unlink()
+                except OSError as exc:
+                    raise CandleGateError(
+                        "Cannot safely release checkpoint lock"
+                    ) from exc
