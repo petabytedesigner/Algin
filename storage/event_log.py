@@ -352,13 +352,29 @@ class AuditProjector:
                     "attempt_id": record.attempt_id,
                     "order_id": entry.get("order_id"), "trade_id": trade_id,
                 }
-                if record.be_state in ("INTENT", "UNKNOWN", "CONFIRMED") and self._enabled("BE"):
+                if record.be_state in ("INTENT", "UNKNOWN", "CONFIRMED", "SUPERSEDED") and self._enabled("BE"):
                     ev = "BE_" + record.be_state
                     events.append({
                         **base, "event_id": _identity_id(self.account_id, trade_id, ev),
                         "stage": "MANAGEMENT", "event": ev,
                         "outcome": _state_outcome(record.be_state),
                         "reason_code": "LIFECYCLE_STATE_" + record.be_state
+                    })
+                if (self._enabled("BE")
+                    and record.be_state == "CONFIRMED"
+                    and record.be_transaction_id is not None):
+                    tx = _ident(record.be_transaction_id, "BE transaction")
+                    if tx not in state.get("processed_transactions", ()):
+                        raise AuditError("BE transaction lacks durable cursor evidence")
+                    events.append({
+                        **base,
+                        "event_id": _identity_id(
+                            self.account_id, trade_id, "BE_TX", tx
+                        ),
+                        "stage": "TRANSACTION", "event": "BE_TX_CONFIRMED",
+                        "outcome": "SUCCESS",
+                        "reason_code": "RECONCILED_STOP_TRANSACTION",
+                        "transaction_id": tx,
                     })
                 if self._enabled("PARTIAL"):
                     for phase, action in sorted(record.partial_phases.items()):
@@ -371,6 +387,102 @@ class AuditProjector:
                             "outcome": _state_outcome(stage),
                             "reason_code": "LIFECYCLE_STATE_" + stage,
                             "detail": _field(phase, "partial phase", required=True)
+                        })
+                        tx = action.get("transaction_id")
+                        if stage == "CONFIRMED" and tx is not None:
+                            tx = _ident(tx, "partial transaction")
+                            if (tx not in state.get("processed_transactions", ())
+                                or tx not in record.close_transaction_ids):
+                                raise AuditError("Partial transaction not durably reconciled")
+                            events.append({
+                                **base,
+                                "event_id": _identity_id(
+                                    self.account_id, trade_id, phase, "PARTIAL_TX", tx
+                                ),
+                                "stage": "TRANSACTION",
+                                "event": "PARTIAL_TX_CONFIRMED",
+                                "outcome": "SUCCESS",
+                                "reason_code": "RECONCILED_PARTIAL_TRANSACTION",
+                                "transaction_id": tx,
+                                "detail": _field(
+                                    phase, "partial phase", required=True
+                                ),
+                            })
+            # Explicit full-close reservations were introduced after the
+            # original audit schema. Project immutable staged evidence and
+            # independently proven terminal results without changing the CSV
+            # header or reusing an earlier event ID for different evidence.
+            close_intents = state.get("close_intents", {})
+            if not isinstance(close_intents, dict):
+                raise AuditError("Malformed close-intent audit source")
+            for trade_id, intent in sorted(close_intents.items()):
+                if not isinstance(intent, dict) or trade_id not in state["trades"]:
+                    raise AuditError("Orphan close intent")
+                from risk.trade_lifecycle import TradeRecord
+                rec = TradeRecord.from_dict(state["trades"][trade_id])
+                if (rec.trade_id != trade_id
+                    or rec.attempt_id != intent.get("attempt_id")
+                    or rec.attempt_id not in identities
+                    or intent.get("trade_id") != trade_id):
+                    raise AuditError("Close intent has no journal provenance")
+                signal, instrument, direction, entry = identities[rec.attempt_id]
+                base = {
+                    "correlation_id": signal, "instrument": instrument,
+                    "direction": direction, "attempt_id": rec.attempt_id,
+                    "order_id": entry.get("order_id"), "trade_id": trade_id,
+                }
+                status = intent.get("status")
+                if status not in ("INTENT", "UNKNOWN", "CONFIRMED", "SUPERSEDED"):
+                    raise AuditError("Unknown close-intent state")
+                if self._enabled("CLOSE"):
+                    events.append({
+                        **base,
+                        "event_id": _identity_id(
+                            self.account_id, trade_id, "CLOSE_INTENT"
+                        ),
+                        "stage": "MANAGEMENT", "event": "CLOSE_INTENT",
+                        "outcome": "ATTEMPT",
+                        "reason_code": "DURABLE_CLOSE_INTENT",
+                        "timestamp": _parse_time(intent.get("created_at")),
+                    })
+                    if status != "INTENT":
+                        outcome = {
+                            "UNKNOWN": "UNKNOWN",
+                            "CONFIRMED": "SUCCESS",
+                            "SUPERSEDED": "INFO",
+                        }[status]
+                        tx = intent.get("confirmed_transaction_id")
+                        if status in ("CONFIRMED", "SUPERSEDED"):
+                            close = state["closed_results"].get(trade_id)
+                            if (not rec.closed or not rec.result_counted
+                                or not isinstance(close, dict)
+                                or tx != close.get("transaction_id")
+                                or tx not in state.get("counted_closures", ())
+                                or tx not in state.get("processed_transactions", ())):
+                                raise AuditError("Close outcome lacks broker proof")
+                        elif tx is not None:
+                            raise AuditError("Unknown close intent claims confirmed tx")
+                        events.append({
+                            **base,
+                            "event_id": _identity_id(
+                                self.account_id, trade_id, "CLOSE_" + status,
+                                tx or "NO_TX"
+                            ),
+                            "stage": "MANAGEMENT",
+                            "event": "CLOSE_" + status,
+                            "outcome": outcome,
+                            "reason_code": (
+                                "BROKER_CLOSE_RECONCILED"
+                                if status == "CONFIRMED"
+                                else "BROKER_CLOSE_SUPERSEDED_INTENT"
+                                if status == "SUPERSEDED"
+                                else "CLOSE_OUTCOME_UNRESOLVED"
+                            ),
+                            "transaction_id": tx,
+                            "timestamp": _parse_time(
+                                state["closed_results"][trade_id]["closed_at"]
+                                if tx else intent["created_at"]
+                            ),
                         })
             for trade_id, close in sorted(state["closed_results"].items()):
                 if trade_id not in state["trades"]:
@@ -519,4 +631,8 @@ def _state_outcome(value):
         return "UNKNOWN"
     if value == "INTENT":
         return "ATTEMPT"
+    if value == "SUPERSEDED":
+        # The broker's independent full close invalidated this intent.
+        # Never report it as successful BE/partial execution.
+        return "INFO"
     raise AuditError("Invalid lifecycle management state")
