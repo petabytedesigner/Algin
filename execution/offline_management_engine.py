@@ -200,8 +200,11 @@ class SyntheticLifecycleBroker:
             }
             self.transactions.append(market)
             fill_id = self._next_id()
+            # Close requests use positive magnitude; ORDER_FILL trade effects
+            # and fill units use the signed opposing side of the open trade.
+            offset_units = -amount if current > 0 else amount
             effect = {
-                "tradeID": command.trade_id, "units": str(amount),
+                "tradeID": command.trade_id, "units": str(offset_units),
                 "realizedPL": "0", "financing": "0",
                 "guaranteedExecutionFee": "0", "halfSpreadCost": "0",
                 "price": str(trade["price"]),
@@ -213,7 +216,7 @@ class SyntheticLifecycleBroker:
                 "time": iso_utc(utc_now()),
                 "pl": "0", "financing": "0", "commission": "0",
                 "guaranteedExecutionFee": "0", "halfSpreadCost": "0",
-                "units": str(amount), "fullVWAP": str(trade["price"]),
+                "units": str(offset_units), "fullVWAP": str(trade["price"]),
             }
             if amount == abs(current):
                 fill["tradesClosed"] = [effect]
