@@ -22,7 +22,7 @@ Kategoria 09 trajton (a) identitetin e breakout/retest dhe lidhjen e tij me BOS/
 
 ## 4. Scoring dhe Grade
 
-`ScoringEngine` kërkon të gjitha metrikat aktive të peshëzuara, përveç `liquidity_sweep` që është shprehimisht opsionale derisa të matet. Mungesa e një metrike nuk trajtohet më si `0` i supozuar. Kufijtë e politikës **nuk ndryshojnë**: Grade A nga 80, Grade B nga 60, Grade C nga 40. `Strategy.evaluate_signal` nuk lëshon më `StrategySignal` të tregtueshëm për Grade C; kthen `last_rejection_reason=GRADE_NOT_TRADEABLE`. Grade D mbetet `SCORE_BELOW_THRESHOLD`. `TradePlanner` vazhdon të lejojë vetëm A/B.
+`ScoringEngine` kërkon të gjitha metrikat aktive të peshëzuara, përveç `liquidity_sweep` që është shprehimisht opsionale derisa të matet. Mungesa e një metrike nuk trajtohet më si `0` i supozuar. Kufijtë e politikës **nuk ndryshojnë**: Grade A nga 80, Grade B nga 60, Grade C nga 40. `Strategy.evaluate_signal` nuk lëshon më `StrategySignal` të tregtueshëm për Grade C; kthen `last_rejection_reason=GRADE_NOT_TRADEABLE`. Grade D mbetet `SCORE_BELOW_THRESHOLD`. `TradePlanner` vazhdon të lejojë vetëm A/B. **Regresion historik i sqaruar:** fixture-i LONG i `test_category5.py` ka dy penalizime pattern-i dhe me kufijtë standardë është Grade C. Testi pozitiv i strukturës tani përdor kufij eksplicitë **vetëm brenda testit** për të ruajtur provën BOS/retest, ndërsa një test i veçantë kërkon refuzimin e Grade C në konfigurimin standard.
 
 ## 5. Filtri i sesionit
 
@@ -34,6 +34,6 @@ Ky kontroll nuk është verifikim i kalendarit specifik të tregtimit në OANDA;
 
 ## 6. Testimi dhe kriteret e pranimit
 
-`tests/test_phase_c_category09.py` shton 15 teste deterministe me fixtures offline: përputhjen e pivot/BOS për LONG/SHORT, skadim konfigurimi, retest i dyfishtë, mutacione të të dhënave të ardhshme pa lookahead (100 raste me seed), metrikat e detyrueshme dhe kufijtë A/B/C/D, ruajtjen e sinjalit ekzistues pozitiv, ndarjen e sesionit nga mbyllja javore dhe verifikimi i kuotës.
+`tests/test_phase_c_category09.py` shton 16 teste deterministe me fixtures offline: përputhjen e pivot/BOS për LONG/SHORT, skadim konfigurimi, retest i dyfishtë, mutacione të të dhënave të ardhshme pa lookahead (100 raste me seed), metrikat e detyrueshme dhe kufijtë A/B/C/D, ruajtjen e sinjalit ekzistues pozitiv, ndarjen e sesionit nga mbyllja javore dhe verifikimi i kuotës.
 
 Kategoria pranohet kur ekzekutohet suita e plotë në GitHub Actions, `main.py --check` kalon, sigurohet scope-i i skedarëve dhe merge-i bëhet me SHA të pritur. **Offline PASS nuk garanton sukses të strategjisë ose sjellje identike nga data-feed real**; këto verifikohen në Kategoritë 10–13.
