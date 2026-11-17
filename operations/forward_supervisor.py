@@ -22,6 +22,7 @@ from broker.practice_transport import PRACTICE_API, _PRACTICE_WRITES_RELEASED
 from operations.forward_journal import (
     ForwardJournal, ForwardEvidenceError, report_runs,
 )
+from operations.forward_performance import performance_from_store
 from storage.heartbeat import Heartbeat, HeartbeatError
 from utils.time_tools import parse_utc, utc_now
 
@@ -301,8 +302,11 @@ def main(argv=None):
                               "broker_mutations": 0}, sort_keys=True))
             return 0
         if args.report:
-            print(json.dumps(report_runs(REPO_ROOT / ".local" / "forward-runs"),
-                             sort_keys=True))
+            report = report_runs(REPO_ROOT / ".local" / "forward-runs")
+            report["realized_performance"] = performance_from_store(
+                EXPECTED_ACCOUNT, directory=REPO_ROOT / ".local"
+            )
+            print(json.dumps(report, sort_keys=True))
             return 0
         env = account_environment(REPO_ROOT)
         code = ForwardSupervisor(interval=args.interval,
