@@ -29,6 +29,6 @@ jobs:
         run: python -m coverage run --branch -m unittest discover -s tests -v
       - name: Report core operational module coverage
         run: |
-          python -m coverage report --include='storage/event_log.py,storage/heartbeat.py,storage/lifecycle_state.py,storage/intent_journal.py,broker/account_reconciler.py,execution/offline_management_engine.py' --fail-under=70
+          python -m coverage report --include='storage/event_log.py,storage/heartbeat.py,storage/lifecycle_state.py,storage/intent_journal.py,broker/account_reconciler.py,execution/offline_management_engine.py' --fail-under=80
       - name: Observe-only configuration check
         run: python main.py --check
