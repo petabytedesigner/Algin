@@ -479,7 +479,7 @@ class AccountReconciler:
             rec = TradeRecord.from_dict(saved)
             if tid not in broker_trades and not rec.closed:
                 blockers.append("Open trade missing without confirmed close " + tid)
-        if orders and not self._verified_protective_orders(
+        if not self._verified_protective_orders(
             orders, broker_trades, validated_open, proposed["trades"]
         ):
             blockers.append("Unreconciled pending broker orders")
