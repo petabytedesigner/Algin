@@ -242,7 +242,13 @@ class BreakAndScoreTests(unittest.TestCase):
 
     def test_P44_P45_valid_bullish_signal_and_wrong_direction(self):
         sample = candles()
-        strat = Strategy()
+        # This synthetic candle sequence incurs two pattern-quality
+        # penalties and is Grade C under production thresholds. Give the
+        # structural test explicit fixture-only B thresholds; production
+        # Grade C rejection is asserted separately in Category 09.
+        strat = Strategy(ScoringConfig(
+            grade_c_min=0, grade_b_min=50, grade_a_min=80
+        ))
         long = strat.evaluate_signal(
             "EUR_USD", "LONG", sample, 1.1020, 1.1008,
             .0010, 1.0, 1.2, NOW
