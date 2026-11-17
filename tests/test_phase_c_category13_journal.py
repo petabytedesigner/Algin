@@ -79,7 +79,8 @@ class ForwardJournalTests(unittest.TestCase):
         try:
             log.emit("START", "SUPERVISOR_LAUNCHING", now=NOW)
             log.emit("SAMPLE", "CYCLE_COMPLETE", pid=1221,
-                     age_seconds=4, now=NOW+timedelta(seconds=30))
+                     age_seconds=4, cycle_id="cycle-1",
+                     now=NOW+timedelta(seconds=30))
             log.emit("STOP", "SAMPLE_WINDOW_COMPLETE", now=NOW+timedelta(seconds=31))
         finally:
             log.close()
@@ -91,6 +92,9 @@ class ForwardJournalTests(unittest.TestCase):
         summary=report_runs(self.folder)
         self.assertEqual(summary["completed_runs"], 1)
         self.assertEqual(summary["samples"], 1)
+        self.assertEqual(summary["completed_cycle_samples"], 1)
+        self.assertEqual(summary["broker_verified_cycles"], 0)
+        self.assertEqual(summary["broker_validation_status"], "NOT_ATTESTED_BY_HEARTBEAT")
         self.assertEqual(summary["uptime_24h"], "NOT_MEASURED_ON_DEVICE")
         self.assertEqual(summary["performance"], "NOT_VERIFIED")
 
@@ -122,7 +126,7 @@ class ForwardJournalTests(unittest.TestCase):
     def test_out_of_sequence_or_removed_events_rejected(self):
         log=self.new()
         log.emit("START", "SUPERVISOR_LAUNCHING", now=NOW)
-        log.emit("SAMPLE", "ACTIVE", now=NOW)
+        log.emit("LIVENESS", "ACTIVE", cycle_id="cycle-1", now=NOW)
         log.emit("STOP", "SAMPLE_WINDOW_COMPLETE", now=NOW)
         log.close()
         rows=log.path.read_text().splitlines()

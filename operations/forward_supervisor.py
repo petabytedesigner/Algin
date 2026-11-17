@@ -190,24 +190,30 @@ class ForwardSupervisor:
             # Inspect the *same* already-validated Heartbeat.read snapshot.
             # A second read could race with another process replacing the
             # file, accepting state from a different PID (TOCTOU).
+            cycle_id = snapshot.get("cycle_id")
             if stamp > now + timedelta(seconds=5):
-                return "BLOCKED", "FUTURE_HEARTBEAT", -1
+                return "BLOCKED", "FUTURE_HEARTBEAT", -1, ""
             if stamp < started - timedelta(seconds=5):
-                return "PENDING", "OLD_HEARTBEAT", -1
+                return "PENDING", "OLD_HEARTBEAT", -1, ""
             if snapshot["pid"] != proc.pid:
-                return "BLOCKED", "FOREIGN_HEARTBEAT", -1
+                return "BLOCKED", "FOREIGN_HEARTBEAT", -1, ""
             age_seconds = max(0, int((now - stamp).total_seconds()))
             if age_seconds > self.max_age:
-                return "BLOCKED", "STALE_HEARTBEAT", age_seconds
+                return "BLOCKED", "STALE_HEARTBEAT", age_seconds, ""
+            if (not isinstance(cycle_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", cycle_id) is None):
+                return "BLOCKED", "INVALID_CYCLE_ID", age_seconds, ""
             if snapshot["state"] == "BLOCKED":
                 if snapshot["reason_code"] in NO_TRADE_GATE:
-                    return "GATE", snapshot["reason_code"], age_seconds
-                return "BLOCKED", "BOT_" + snapshot["reason_code"], age_seconds
-            if snapshot["state"] in ("ACTIVE", "CYCLE_COMPLETE"):
-                return "SAMPLE", snapshot["state"], age_seconds
-            return "BLOCKED", "INVALID_HEARTBEAT_STATE", -1
+                    return "GATE", snapshot["reason_code"], age_seconds, cycle_id
+                return "BLOCKED", "BOT_" + snapshot["reason_code"], age_seconds, ""
+            if snapshot["state"] == "ACTIVE":
+                return "LIVENESS", "ACTIVE", age_seconds, cycle_id
+            if snapshot["state"] == "CYCLE_COMPLETE":
+                return "SAMPLE", "CYCLE_COMPLETE", age_seconds, cycle_id
+            return "BLOCKED", "INVALID_HEARTBEAT_STATE", -1, ""
         except HeartbeatError:
-            return "PENDING", "HEARTBEAT_UNAVAILABLE", -1
+            return "PENDING", "HEARTBEAT_UNAVAILABLE", -1, ""
 
     def run(self, *, env):
         verify_readonly()
@@ -232,7 +238,9 @@ class ForwardSupervisor:
                     stderr=subprocess.STDOUT,
                 )
                 started = self.clock()
-                valid = 0
+                completed_cycles = set()
+                gated = 0
+                heartbeat_observations = 0
                 polls = 0
                 while True:
                     self.sleeper(self.interval)
@@ -240,7 +248,7 @@ class ForwardSupervisor:
                         journal.emit("BLOCKED", "BOT_PROCESS_EXITED",
                                      pid=proc.pid, now=self.clock())
                         return 3
-                    status, reason, age = self._inspect(proc, started)
+                    status, reason, age, cycle_id = self._inspect(proc, started)
                     if status == "PENDING":
                         if self.clock()-started >= timedelta(seconds=self.startup_grace):
                             journal.emit("BLOCKED", "STARTUP_NO_HEARTBEAT",
@@ -252,15 +260,39 @@ class ForwardSupervisor:
                         journal.emit("BLOCKED", reason, pid=proc.pid,
                                      age_seconds=age, now=self.clock())
                         return 3
-                    else:
-                        journal.emit(status, reason, pid=proc.pid,
-                                     age_seconds=age, now=self.clock())
-                        valid += 1
+                    elif status == "GATE":
+                        journal.emit("GATE", reason, pid=proc.pid,
+                                     age_seconds=age, now=self.clock(),
+                                     cycle_id=cycle_id)
+                        gated += 1
+                    elif status == "LIVENESS":
+                        # ACTIVE is a process pulse, NOT a completed scan.
+                        journal.emit("LIVENESS", "ACTIVE", pid=proc.pid,
+                                     age_seconds=age, now=self.clock(),
+                                     cycle_id=cycle_id)
+                        heartbeat_observations += 1
+                    elif status == "SAMPLE":
+                        heartbeat_observations += 1
+                        if cycle_id in completed_cycles:
+                            # Multiple polls of a single completed heartbeat
+                            # can never inflate the count of successful cycles.
+                            journal.emit("LIVENESS", "CYCLE_ALREADY_OBSERVED",
+                                         pid=proc.pid, age_seconds=age,
+                                         now=self.clock(), cycle_id=cycle_id)
+                        else:
+                            journal.emit("SAMPLE", "CYCLE_COMPLETE",
+                                         pid=proc.pid, age_seconds=age,
+                                         now=self.clock(), cycle_id=cycle_id)
+                            completed_cycles.add(cycle_id)
                     polls += 1
                     if self.samples and polls >= self.samples:
-                        if not valid:
-                            journal.emit("BLOCKED", "NO_HEALTHY_OBSERVATION",
-                                         pid=proc.pid, now=self.clock())
+                        if not completed_cycles and not gated:
+                            journal.emit(
+                                "BLOCKED", "NO_COMPLETED_CYCLE"
+                                if heartbeat_observations
+                                else "NO_HEALTHY_OBSERVATION",
+                                pid=proc.pid, now=self.clock(),
+                            )
                             return 3
                         journal.emit("STOP", "SAMPLE_WINDOW_COMPLETE",
                                      pid=proc.pid, now=self.clock())
