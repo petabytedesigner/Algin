@@ -444,9 +444,6 @@ class NewsTests(unittest.TestCase):
                 data.return_value.get_account_instruments.return_value = {
                     "EUR_USD": rules
                 }
-                data.return_value.get_account_instruments.return_value = {
-                    "EUR_USD": rules
-                }
                 data.return_value.get_candles.side_effect = (
                     lambda symbol, *args:
                     candles() if symbol == "EUR_USD" else None
