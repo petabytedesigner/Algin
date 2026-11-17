@@ -7,12 +7,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from math import isfinite
+from dataclasses import replace
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import hashlib
+import json
 import random
 import unittest
 
 import config
 from data.market_sessions import MarketSessions
+from execution.trade_coordinator import stable_signal_id
+from storage.intent_journal import IntentJournal, JournalError
+from utils.time_tools import iso_utc, parse_utc
 from risk.scoring_engine import ScoringConfig, ScoringEngine
 from strategy.breakout_retest import BreakoutRetest
 from strategy.strategy import Strategy
@@ -156,6 +163,111 @@ class BreakoutIdentityTests(unittest.TestCase):
                 direction="LONG",
             )
             self.assertEqual(observed, baseline)
+
+
+class DurableSetupIdentityTests(unittest.TestCase):
+    def test_setup_id_is_stable_when_rolling_window_changes_offsets(self):
+        original = candles()
+        time0 = parse_utc(original[0]["time"])
+        extra = []
+        for i in range(8, 0, -1):
+            extra.append({
+                "time": iso_utc(time0 - timedelta(minutes=15*i)),
+                "complete": True, "open": 1.1000,
+                "high": 1.1010, "low": 1.0990, "close": 1.1001,
+            })
+        config_b = ScoringConfig(
+            grade_c_min=0, grade_b_min=50, grade_a_min=80
+        )
+        engine = Strategy(scoring_config=config_b)
+        a = engine.evaluate_signal(
+            "EUR_USD", "LONG", original, 1.1020, 1.1008,
+            .001, 1.0, 1.2, NOW,
+        )
+        b = engine.evaluate_signal(
+            "EUR_USD", "LONG", extra + original, 1.1020, 1.1008,
+            .001, 1.0, 1.2, NOW,
+        )
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        self.assertEqual(a.setup_id, b.setup_id)
+        self.assertTrue(a.setup_id.startswith("algin-setup-"))
+        self.assertEqual(len(a.setup_id), 52)
+
+    def test_same_setup_on_later_candle_is_one_durable_signal(self):
+        setup = "algin-setup-" + "a" * 40
+        early = NOW - timedelta(minutes=30)
+        later = NOW - timedelta(minutes=15)
+        first = stable_signal_id(
+            "acct-1", "EUR_USD", "LONG", early, setup_id=setup
+        )
+        second = stable_signal_id(
+            "acct-1", "EUR_USD", "LONG", later, setup_id=setup
+        )
+        self.assertEqual(first, second)
+        with TemporaryDirectory() as root:
+            journal = IntentJournal("acct-1", directory=root)
+            journal.begin(
+                signal_id=first, attempt_id="algin-first",
+                request={"order": {
+                    "instrument": "EUR_USD", "units": "10"
+                }}, risk_pct="0.5", margin_home="5", grade="B",
+            )
+            with self.assertRaises(JournalError):
+                journal.begin(
+                    signal_id=second, attempt_id="algin-second",
+                    request={"order": {
+                        "instrument": "EUR_USD", "units": "10"
+                    }}, risk_pct="0.5", margin_home="5", grade="B",
+                )
+
+    def test_legacy_candle_identity_hash_remains_unmodified(self):
+        candle = NOW - timedelta(minutes=15)
+        original = json.dumps(
+            ("acct-1", "EUR_USD", "LONG", "M15", iso_utc(candle)),
+            separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        expected = (
+            "algin-signal-" + hashlib.sha256(original).hexdigest()[:40]
+        )
+        self.assertEqual(stable_signal_id(
+            "acct-1", "EUR_USD", "LONG", candle,
+        ), expected)
+        self.assertNotEqual(stable_signal_id(
+            "acct-1", "EUR_USD", "LONG", candle,
+        ), stable_signal_id(
+            "acct-1", "EUR_USD", "LONG", candle + timedelta(minutes=15),
+        ))
+
+    def test_unverified_setup_identity_is_refused(self):
+        for identity in ("other", "algin-setup-" + "z"*40, 123, ""):
+            with self.subTest(identity=identity):
+                with self.assertRaises(ValueError):
+                    stable_signal_id(
+                        "acct-1", "EUR_USD", "LONG",
+                        NOW - timedelta(minutes=15),
+                        setup_id=identity,
+                    )
+
+    def test_coordinator_consumes_strict_setup_id_from_strategy_signal(self):
+        from test_phase_b_category05 import CoordinatorTests
+        fixture = CoordinatorTests(
+            "test_preview_signal_filters_reconciled_risk_tradeplan_no_post"
+        )
+        fixture.setUp()
+        try:
+            setup = "algin-setup-" + "b"*40
+            req = fixture.request(signal=replace(
+                fixture.signal, setup_id=setup
+            ))
+            result = fixture.coordinator.preview(req)
+            self.assertEqual(result.status, "PREVIEW")
+            self.assertEqual(result.signal_id, stable_signal_id(
+                "acct-1", "EUR_USD", "LONG", req.candle_time,
+                setup_id=setup,
+            ))
+        finally:
+            fixture.doCleanups()
 
 
 class ScoringAndGradeTests(unittest.TestCase):
