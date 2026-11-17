@@ -58,6 +58,25 @@ jobs:
           os.environ.update(pairs)
           config.API_KEY = pairs["OANDA_API_TOKEN"]
           config.ACCOUNT_ID = pairs["OANDA_ACCOUNT_ID"]
+          # Check the token against OANDA's token-wide account listing,
+          # separately from access to the selected account. Never print
+          # token, response content, full account ID or headers.
+          import requests
+          try:
+              check = requests.get(
+                  PRACTICE_API + "/accounts",
+                  headers={"Authorization": "Bearer " + pairs["OANDA_API_TOKEN"]},
+                  timeout=8, allow_redirects=False,
+              )
+              print("PRACTICE_TOKEN_ACCOUNT_LIST_HTTP=" + str(check.status_code))
+              if check.status_code == 200:
+                  doc = check.json()
+                  valid_ids = [x.get("id") for x in doc.get("accounts", [])
+                               if isinstance(x, dict)]
+                  print("PRACTICE_TOKEN_AUTHORIZES_TARGET=" +
+                        str(pairs["OANDA_ACCOUNT_ID"] in valid_ids).lower())
+          except Exception:
+              print("PRACTICE_TOKEN_ACCOUNT_LIST_UNAVAILABLE")
           print("C12_MANUAL_CLOSE_REAL_GET_STARTED")
           runpy.run_module("broker.practice_close_audit", run_name="__main__")
           PY
