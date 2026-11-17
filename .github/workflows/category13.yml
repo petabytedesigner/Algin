@@ -43,7 +43,8 @@ jobs:
               j=ForwardJournal(d)
               j.emit("START","SUPERVISOR_LAUNCHING")
               for i in range(1500):
-                  j.emit("SAMPLE","CYCLE_COMPLETE",age_seconds=i%120)
+                  j.emit("SAMPLE","CYCLE_COMPLETE",age_seconds=i%120,
+                         cycle_id=f"offline-{i}")
               j.emit("STOP","SAMPLE_WINDOW_COMPLETE")
               j.close()
               records=read_run(j.path)
