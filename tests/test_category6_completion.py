@@ -638,7 +638,7 @@ class FullFakeBrokerCycleTests(unittest.TestCase):
                 "id": "102", "accountID": "acct-1",
                 "type": "ORDER_FILL",
                 "tradeReduced": {
-                    "tradeID": "2201", "units": units, "realizedPL": "10"
+                    "tradeID": "2201", "units": str(-D(units)), "realizedPL": "10"
                 }
             }]
             live.trades[0]["currentUnits"] = str(remaining)
