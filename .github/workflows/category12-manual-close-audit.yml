@@ -5,6 +5,7 @@ on:
       - development/phase-c-category-12-manual-close-audit-2026-11-17
     paths:
       - .github/workflows/category12-manual-close-audit.yml
+      - broker/practice_close_audit.py
 permissions:
   contents: read
 concurrency:
