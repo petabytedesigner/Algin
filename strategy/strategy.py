@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
+import json
 import math
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +35,9 @@ class StrategySignal:
     metrics: Dict[str, float]
     reason: str
     timestamp: datetime
+    # Immutable BOS identity across sliding history windows and retest bars.
+    # Optional for legacy/injected signals; journal remains the authority.
+    setup_id: str | None = None
 
 
 class Strategy:
@@ -146,8 +151,21 @@ class Strategy:
                   "Breakout->Retest", f"Trend {trend.direction}"]
         if patterns.quality < 1:
             reason.append("Pattern penalty applied")
+        # Sliding windows renumber pivot/breakout indices. A stable setup
+        # identity depends on the actual completed UTC bars, never offsets
+        # in the current 200-candle window or the latest retest candle.
+        setup_key = json.dumps((
+            "M15", instrument, direction,
+            clean[sequence.pivot_index]["time"],
+            clean[sequence.breakout_index]["time"],
+        ), separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        setup_id = (
+            "algin-setup-" +
+            hashlib.sha256(setup_key).hexdigest()[:40]
+        )
         return StrategySignal(
             instrument=instrument, direction=direction, score=score,
             grade=grade, metrics=metrics,
-            reason=", ".join(reason), timestamp=timestamp
+            reason=", ".join(reason), timestamp=timestamp,
+            setup_id=setup_id,
         )
