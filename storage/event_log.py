@@ -12,6 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import secrets
 from utils.time_tools import iso_utc, parse_utc, utc_now
 
 FIELDS = ("timestamp", "event_id", "correlation_id", "instrument", "direction",
@@ -128,11 +129,15 @@ class EventLog:
             fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except OSError as exc:
             raise AuditError("Audit log locked/unavailable") from exc
+        owner = secrets.token_hex(24)
+        identity = os.fstat(fd)
+        established = False
         try:
             with os.fdopen(fd, "w", encoding="ascii") as handle:
-                handle.write(str(os.getpid()))
+                handle.write(f"pid={os.getpid()} owner={owner}\\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            established = True
             existing = self._existing()
             new = []
             for row in values:
@@ -175,10 +180,21 @@ class EventLog:
         except (OSError, UnicodeError, csv.Error) as exc:
             raise AuditError("Audit append/durability failure") from exc
         finally:
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+            # Never unlink a lock that another writer replaced, even if the
+            # original append raised. An fsync failure before initialization
+            # leaves an orphan lock for explicit operator recovery.
+            if established:
+                try:
+                    current = lock.lstat()
+                    if (lock.is_symlink()
+                        or (current.st_dev, current.st_ino) !=
+                            (identity.st_dev, identity.st_ino)
+                        or lock.read_text(encoding="ascii").strip()
+                            != f"pid={os.getpid()} owner={owner}"):
+                        raise AuditError("Audit lock ownership changed")
+                    lock.unlink()
+                except OSError as exc:
+                    raise AuditError("Cannot safely release audit lock") from exc
 
     def emit(self, **fields):
         """Append a unique event; duplicate event IDs are errors."""
