@@ -187,6 +187,26 @@ class FmpNewsFilterIntegrationTests(unittest.TestCase):
         ):
             self.assertIsNone(NewsFilter().block_trading("GBP_JPY", NOW))
 
+    def test_high_eur_or_usd_impact_blocks_the_fx_pair(self):
+        for currency in ("EUR", "USD"):
+            with self.subTest(currency=currency):
+                self.assertIn(
+                    "HIGH-impact lockout",
+                    self.news([event(currency=currency, when=NOW)])
+                )
+
+    def test_lockout_boundaries_are_inclusive_for_both_currencies(self):
+        for currency in ("EUR", "USD"):
+            for minutes in (-30, 30):
+                with self.subTest(currency=currency, minutes=minutes):
+                    self.assertIn(
+                        "HIGH-impact lockout",
+                        self.news([event(
+                            currency=currency,
+                            when=NOW + timedelta(minutes=minutes)
+                        )])
+                    )
+
     def test_low_or_medium_never_triggers_high_impact_lock(self):
         for level in ("Low", "Medium"):
             with self.subTest(level=level):
