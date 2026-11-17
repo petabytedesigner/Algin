@@ -6,6 +6,7 @@ configured, new-entry news eligibility is UNKNOWN and must fail closed.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -20,6 +21,11 @@ from utils.time_tools import parse_utc, require_utc, utc_now
 
 class NewsUnavailable(RuntimeError):
     """Unknown, unavailable, malformed or stale calendar data."""
+
+
+# Preserve the overridable _fetch() no-argument contract used by historical
+# replay while passing the same UTC evaluation instant to a live provider.
+_FETCH_REFERENCE_TIME = ContextVar("news_fetch_reference_time", default=None)
 
 
 class NewsFilter:
@@ -127,7 +133,7 @@ class NewsFilter:
             try:
                 return fetch_fmp_calendar(
                     api_key=api_key,
-                    now=utc_now(),
+                    now=_FETCH_REFERENCE_TIME.get() or utc_now(),
                 )
             except FmpCalendarError as exc:
                 raise NewsUnavailable("FMP economic calendar unavailable or unverified") from None
@@ -188,7 +194,11 @@ class NewsFilter:
         self._fetched_at = None
         self._source_identity = None
         self._coverage = None
-        payload = self._fetch()
+        token = _FETCH_REFERENCE_TIME.set(current)
+        try:
+            payload = self._fetch()
+        finally:
+            _FETCH_REFERENCE_TIME.reset(token)
         events, fetched, coverage = self._verify(payload, current, self.max_age)
         self._events = events
         self._fetched_at = fetched
