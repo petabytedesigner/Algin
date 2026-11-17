@@ -1,0 +1,54 @@
+name: Category 13 Termux forward observation and offline endurance
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing runtime
+        run: python -m pip install -r requirements.txt
+      - name: Compile offline app without network broker calls
+        run: python -m compileall -q operations tests
+      - name: Verify immutable broker-write locks
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED, PRACTICE_API; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False; assert config.OANDA_URL == PRACTICE_API'
+      - name: Offline Termux/forward supervisor and evidence regression
+        run: |
+          python -m unittest discover -s tests -p 'test_phase_c_category13_*.py' -v
+      - name: Exercise offline CLI only — no API keys needed
+        run: |
+          python -m operations.forward_supervisor --check
+          python -m operations.forward_supervisor --report
+      - name: Long-horizon synthetic evidence durability stress
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from operations.forward_journal import ForwardJournal,read_run
+          from utils.time_tools import utc_now
+          with TemporaryDirectory() as d:
+              j=ForwardJournal(d)
+              j.emit("START","SUPERVISOR_LAUNCHING")
+              for i in range(1500):
+                  j.emit("SAMPLE","CYCLE_COMPLETE",age_seconds=i%120)
+              j.emit("STOP","SAMPLE_WINDOW_COMPLETE")
+              j.close()
+              records=read_run(j.path)
+              assert len(records)==1502
+              assert records[-1]["event"]=="STOP"
+              assert all(r["event"]=="SAMPLE" for r in records[1:-1])
+          print("SYNTHETIC_1500_SAMPLES_DURABLE_PASS; NOT_24H_ON_DEVICE")
+          PY
