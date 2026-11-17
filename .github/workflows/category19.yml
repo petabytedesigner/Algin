@@ -1,0 +1,35 @@
+name: Category 19 FMP economic-calendar fail-closed validation
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-economic-calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing dependencies and isolated coverage
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install 'coverage>=7.5,<8'
+      - name: Compile calendar and offline regression modules
+        run: python -m compileall -q data/news_filter.py data/economic_calendar_fmp.py tests/test_phase_d_category19.py
+      - name: Verify locked broker writes
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: Run FMP and news lockout regression with branch coverage
+        run: python -m coverage run --branch -m unittest discover -s tests -p 'test_phase_d_category19.py' -v
+      - name: Verify pinned economic-calendar provider branch coverage
+        run: python -m coverage report --include='data/economic_calendar_fmp.py' --fail-under=85
+      - name: Confirm offline policy without API credentials
+        run: python -m operations.forward_supervisor --check
