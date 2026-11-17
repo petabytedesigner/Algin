@@ -69,8 +69,10 @@ class FakeHeartbeat:
         self.stale_seconds = 0
         self.fixed_stamp = None
         self.unavailable = False
+        self.read_calls = 0
 
     def read(self):
+        self.read_calls += 1
         if self.unavailable:
             raise HeartbeatError("Synthetic missing/corrupt")
         stamp = (self.fixed_stamp if self.fixed_stamp is not None
@@ -181,6 +183,18 @@ class ForwardSupervisorTests(unittest.TestCase):
         self.assertEqual(self.history()["recent_block_reason"],
                          "STALE_HEARTBEAT")
         self.assertEqual(len(self.spawned),1)
+
+    def test_one_atomic_heartbeat_read_per_sample(self):
+        self.assertEqual(self.watch(samples=3), 0)
+        # The PID and state must come from the same validated read,
+        # not two separate heartbeat files across an atomic replace.
+        self.assertEqual(self.hb.read_calls, 3)
+
+    def test_future_heartbeat_blocks_without_applying_foreign_clock(self):
+        self.hb.fixed_stamp = NOW + timedelta(minutes=5)
+        self.assertEqual(self.watch(), 3)
+        self.assertEqual(self.history()["recent_block_reason"],
+                         "FUTURE_HEARTBEAT")
 
     def test_foreign_pid_heartbeat_is_not_child_liveness(self):
         self.hb.pid_override=54321
