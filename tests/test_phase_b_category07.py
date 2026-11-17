@@ -61,7 +61,7 @@ class OfflineManagementFixture(LifecycleFixture):
             "commission": "0", "guaranteedExecutionFee": "0",
             "halfSpreadCost": "0",
             "tradesClosed": [{
-                "tradeID": "11", "units": "100",
+                "tradeID": "11", "units": "-100",
                 "realizedPL": "-10", "financing": "0",
                 "guaranteedExecutionFee": "0", "halfSpreadCost": "0",
             }],
@@ -85,6 +85,14 @@ class ManagementActionTests(OfflineManagementFixture):
             ("101", "103", "105"),
         )
         self.assertEqual(self.transport.simulated_writes, 3)
+        self.assertEqual(
+            self.transport.transactions[2]["tradeReduced"]["units"], "-50.00"
+        )
+        self.assertEqual(self.transport.transactions[2]["units"], "-50.00")
+        self.assertEqual(
+            self.transport.transactions[4]["tradesClosed"][0]["units"], "-50.00"
+        )
+        self.assertEqual(self.transport.transactions[4]["units"], "-50.00")
         saved = self.store.load()
         record = TradeRecord.from_dict(saved["trades"]["11"])
         self.assertTrue(record.closed and record.result_counted)
@@ -119,6 +127,21 @@ class ManagementActionTests(OfflineManagementFixture):
         record = TradeRecord.from_dict(self.store.load()["trades"]["11"])
         self.assertEqual(record.current_units, D("-50"))
         self.assertEqual(record.partial_phases["phase1"]["units"], "50.00")
+        self.assertEqual(
+            self.transport.transactions[-1]["tradeReduced"]["units"], "50.00"
+        )
+        self.assertEqual(self.transport.transactions[-1]["units"], "50.00")
+
+    def test_short_full_close_fill_is_buy_side_but_request_is_all(self):
+        self.bootstrap("SHORT")
+        with self.service:
+            result = self.full()
+        self.assertEqual(result.status, "CONFIRMED")
+        market, fill = self.transport.transactions
+        self.assertEqual(market["tradeClose"]["units"], "ALL")
+        self.assertEqual(fill["tradesClosed"][0]["units"], "100")
+        self.assertEqual(fill["units"], "100")
+        self.assertEqual(self.transport.trades, [])
 
     def test_be_command_uses_documented_dependent_order_route(self):
         self.bootstrap()
@@ -330,7 +353,7 @@ class ManagementActionTests(OfflineManagementFixture):
             "id": "101", "accountID": "acct-1",
             "type": "ORDER_FILL", "reason": "STOP_LOSS_ORDER",
             "tradeReduced": {
-                "tradeID": "11", "units": "50", "realizedPL": "0",
+                "tradeID": "11", "units": "-50", "realizedPL": "0",
             }
         }]
         self.transport.trades[0]["currentUnits"] = "50"

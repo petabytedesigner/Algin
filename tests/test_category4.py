@@ -381,11 +381,66 @@ class TradeLifecycleTests(LifecycleFixture):
                     "11", self.rules, bid="1.0975", ask="1.0977"
                 )
 
+    def test_P39_long_partial_wrong_effect_sign_preserves_intent_and_cursor(self):
+        self.bootstrap("LONG")
+        manager = TradeManagement(self.service)
+        with self.service:
+            manager.stage_partial(
+                "11", self.rules, bid="1.1030", ask="1.1032"
+            )
+        self.update_broker({
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "reason": "MARKET_ORDER_TRADE_CLOSE",
+            "tradeReduced": {
+                "tradeID": "11", "units": "50", "realizedPL": "10"
+            }
+        }, current="50")
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        state = self.store.load()
+        self.assertEqual(state["cursor"], "100")
+        self.assertEqual(state["trades"]["11"]["partial_phases"]["phase1"]["state"],
+                         "INTENT")
+        self.transport.transactions[0]["tradeReduced"]["units"] = "-50"
+        with self.service:
+            report = self.service.run()
+        self.assertFalse(report.blocked_reasons)
+        self.assertEqual(self.store.load()["cursor"], "101")
+        self.assertEqual(
+            self.store.load()["trades"]["11"]["partial_phases"]["phase1"]["state"],
+            "CONFIRMED"
+        )
+
+    def test_P39_short_partial_wrong_effect_sign_preserves_intent_and_cursor(self):
+        self.bootstrap("SHORT")
+        manager = TradeManagement(self.service)
+        with self.service:
+            manager.stage_partial(
+                "11", self.rules, bid="1.0975", ask="1.0977"
+            )
+        self.update_broker({
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "reason": "MARKET_ORDER_TRADE_CLOSE",
+            "tradeReduced": {
+                "tradeID": "11", "units": "-50", "realizedPL": "10"
+            }
+        }, current="-50")
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        self.assertEqual(self.store.load()["cursor"], "100")
+        self.transport.transactions[0]["tradeReduced"]["units"] = "50"
+        with self.service:
+            report = self.service.run()
+        self.assertFalse(report.blocked_reasons)
+        self.assertEqual(self.store.load()["trades"]["11"]["current_units"], "-50")
+
     def test_P39_missing_partial_intent_does_not_adopt_reduction(self):
         self.bootstrap()
         self.update_broker({
             "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
-            "tradeReduced": {"tradeID": "11", "units": "30", "realizedPL": "2"}
+            "tradeReduced": {"tradeID": "11", "units": "-30", "realizedPL": "2"}
         }, current="70")
         with self.service:
             with self.assertRaises(ReconcileError):
@@ -396,7 +451,7 @@ class TradeLifecycleTests(LifecycleFixture):
         self.bootstrap()
         self.update_broker({
             "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
-            "tradeReduced": {"tradeID": "11", "units": "200", "realizedPL": "2"}
+            "tradeReduced": {"tradeID": "11", "units": "-200", "realizedPL": "2"}
         }, current="100")
         with self.service:
             with self.assertRaises(ReconcileError):
@@ -424,6 +479,46 @@ class TradeLifecycleTests(LifecycleFixture):
         trade = TradeRecord.from_dict(state["trades"]["11"])
         self.assertTrue(trade.closed and trade.result_counted)
         self.assertEqual(trade.current_units, 0)
+
+    def test_P40_long_full_close_rejects_same_direction_effect(self):
+        self.bootstrap("LONG")
+        self.update_broker({
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "time": "2026-11-15T10:20:00Z",
+            "tradesClosed": [
+                {"tradeID": "11", "units": "100", "realizedPL": "5"}
+            ]
+        }, close=True)
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        self.assertEqual(self.store.load()["cursor"], "100")
+        self.assertEqual(self.store.load()["counted_closures"], [])
+        self.transport.transactions[0]["tradesClosed"][0]["units"] = "-100"
+        with self.service:
+            report = self.service.run()
+        self.assertEqual(report.new_closed_trade_ids, ("11",))
+        self.assertEqual(self.store.load()["counted_closures"], ["101"])
+
+    def test_P40_short_full_close_rejects_same_direction_effect(self):
+        self.bootstrap("SHORT")
+        self.update_broker({
+            "id": "101", "accountID": "acct-1", "type": "ORDER_FILL",
+            "time": "2026-11-15T10:20:00Z",
+            "tradesClosed": [
+                {"tradeID": "11", "units": "-100", "realizedPL": "5"}
+            ]
+        }, close=True)
+        with self.service:
+            with self.assertRaises(ReconcileError):
+                self.service.run()
+        self.assertEqual(self.store.load()["cursor"], "100")
+        self.assertEqual(self.store.load()["closed_results"], {})
+        self.transport.transactions[0]["tradesClosed"][0]["units"] = "100"
+        with self.service:
+            report = self.service.run()
+        self.assertEqual(report.new_closed_trade_ids, ("11",))
+        self.assertEqual(self.store.load()["closed_results"]["11"]["pl"], "5")
 
     def test_P40_missing_close_tx_does_not_mark_closed(self):
         self.bootstrap()
