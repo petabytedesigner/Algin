@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import hashlib
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -94,7 +95,7 @@ class NewsFilter:
             covered_start, covered_end, covered_currencies,
         )
 
-    def _fetch(self):
+    def _fetch(self, *, now=None):
         static = getattr(config, "STATIC_NEWS_LIST", None)
         static_fetched = getattr(config, "STATIC_NEWS_FETCHED_AT", None)
         if static is not None:
@@ -114,7 +115,22 @@ class NewsFilter:
             }
         url = getattr(config, "NEWS_PROVIDER_URL", None)
         if not isinstance(url, str) or not url:
-            raise NewsUnavailable("No verified economic-calendar source configured")
+            # Separate economic-calendar subscription: OANDA credentials
+            # cannot authenticate a third-party provider. Absence means
+            # NEWS_UNKNOWN, never an implied absence of market news.
+            api_key = os.environ.get("FMP_API_KEY", "")
+            if not api_key:
+                raise NewsUnavailable("No verified economic-calendar source configured")
+            from data.economic_calendar_fmp import (
+                FmpCalendarError, fetch_fmp_calendar
+            )
+            try:
+                return fetch_fmp_calendar(
+                    api_key=api_key,
+                    now=utc_now() if now is None else now,
+                )
+            except FmpCalendarError as exc:
+                raise NewsUnavailable("FMP economic calendar unavailable or unverified") from None
         parsed = urlsplit(url)
         pinned_host = getattr(config, "NEWS_PROVIDER_HOST", None)
         # An arbitrary HTTPS URL is not a vetted data source. Require the
@@ -150,6 +166,8 @@ class NewsFilter:
         source = (
             getattr(config, "NEWS_PROVIDER_URL", None),
             getattr(config, "NEWS_PROVIDER_HOST", None),
+            hashlib.sha256(os.environ.get(
+                "FMP_API_KEY", "").encode("utf-8")).hexdigest(),
             fingerprint,
             getattr(config, "STATIC_NEWS_FETCHED_AT", None),
             getattr(config, "STATIC_NEWS_COVERAGE_START", None),
@@ -170,7 +188,7 @@ class NewsFilter:
         self._fetched_at = None
         self._source_identity = None
         self._coverage = None
-        payload = self._fetch()
+        payload = self._fetch(now=current)
         events, fetched, coverage = self._verify(payload, current, self.max_age)
         self._events = events
         self._fetched_at = fetched
