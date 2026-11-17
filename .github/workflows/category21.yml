@@ -1,0 +1,56 @@
+name: Category 21 operational readiness NO-GO verification
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install existing dependencies and coverage
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install 'coverage>=7.5,<8'
+      - name: Verify dependency installation
+        run: python -m pip check
+      - name: Verify broker writes are independently locked
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: Offline release NO-GO regression
+        run: python -m coverage run --branch -m unittest discover -s tests -p 'test_phase_d_category21.py' -v
+      - name: Enforce readiness assessment coverage
+        run: python -m coverage report --include='operations/release_readiness.py' --fail-under=85
+      - name: Report local-only readiness without credential/network access
+        run: python -m operations.release_readiness --report
+      - name: Ensure execution-readiness command can never pass
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          p = subprocess.run(
+              [sys.executable, "-m", "operations.release_readiness",
+               "--require-execution-ready"],
+              capture_output=True, text=True, timeout=12,
+          )
+          assert p.returncode == 3
+          data = json.loads(p.stdout)
+          assert data["decision"] == "NO_GO_AUTONOMOUS_EXECUTION"
+          assert data["execution_authorized"] is False
+          assert data["broker_mutations"] == 0
+          assert data["gate_checks"]["independent_broker_write_locks"] == "LOCKED"
+          print("CATEGORY21_NO_GO_ENFORCED; ZERO_BROKER_MUTATIONS")
+          PY
