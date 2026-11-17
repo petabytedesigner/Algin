@@ -1,0 +1,62 @@
+name: Category 12 manual close OANDA Practice verified GET
+on:
+  push:
+    branches:
+      - development/phase-c-category-12-manual-close-audit-2026-11-17
+    paths:
+      - .github/workflows/category12-manual-close-audit.yml
+permissions:
+  contents: read
+concurrency:
+  group: algin-category12-manual-close-read
+  cancel-in-progress: false
+jobs:
+  verified-manual-close-read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime
+        run: python -m pip install -r requirements.txt
+      - name: Offline strict close audit tests
+        run: python -m unittest discover -s tests -p 'test_phase_c_category12_manual_close.py' -v
+      - name: Authenticate against existing DEMO configuration, GET-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import runpy
+          from pathlib import Path
+          import config
+          from broker.practice_transport import PRACTICE_API, _PRACTICE_WRITES_RELEASED
+          pairs = {}
+          for raw in Path(".env.example").read_text(encoding="utf-8").splitlines():
+              line = raw.strip()
+              if not line or line.startswith("#"):
+                  continue
+              if line.count("=") != 1:
+                  raise SystemExit("DEMO_CONFIG_INVALID")
+              key, value = (s.strip() for s in line.split("=", 1))
+              if key not in ("OANDA_API_TOKEN", "OANDA_ACCOUNT_ID") or key in pairs:
+                  raise SystemExit("DEMO_CONFIG_INVALID")
+              pairs[key] = value
+          if (set(pairs) != {"OANDA_API_TOKEN", "OANDA_ACCOUNT_ID"}
+              or pairs["OANDA_ACCOUNT_ID"] != "101-001-37674492-003"
+              or len(pairs["OANDA_API_TOKEN"]) < 20):
+              raise SystemExit("DEMO_ACCOUNT_MISMATCH")
+          if (config.OANDA_URL != PRACTICE_API
+              or config.ORDER_WRITES_ENABLED is not False
+              or _PRACTICE_WRITES_RELEASED is not False):
+              raise SystemExit("GET_ONLY_GATES_FAILED")
+          os.environ.update(pairs)
+          config.API_KEY = pairs["OANDA_API_TOKEN"]
+          config.ACCOUNT_ID = pairs["OANDA_ACCOUNT_ID"]
+          print("C12_MANUAL_CLOSE_REAL_GET_STARTED")
+          runpy.run_module("broker.practice_close_audit", run_name="__main__")
+          PY
