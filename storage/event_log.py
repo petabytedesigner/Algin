@@ -138,7 +138,24 @@ class EventLog:
                 handle.flush()
                 os.fsync(handle.fileno())
             established = True
+
+            def require_ownership():
+                try:
+                    current = lock.lstat()
+                    owned = (
+                        not lock.is_symlink()
+                        and (current.st_dev, current.st_ino)
+                            == (identity.st_dev, identity.st_ino)
+                        and lock.read_text(encoding="ascii").strip()
+                            == f"pid={os.getpid()} owner={owner}"
+                    )
+                except OSError as exc:
+                    raise AuditError("Cannot verify audit lock ownership") from exc
+                if not owned:
+                    raise AuditError("Audit lock ownership changed")
+
             existing = self._existing()
+            require_ownership()
             new = []
             for row in values:
                 key = row["event_id"]
@@ -154,6 +171,7 @@ class EventLog:
                 new.append(row)
             if not new:
                 return values
+            require_ownership()
             if self.path.exists() and self.path.stat().st_size >= MAX_BYTES:
                 raise AuditError("Audit file must be rotated with an approved procedure")
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
@@ -184,14 +202,8 @@ class EventLog:
             # original append raised. An fsync failure before initialization
             # leaves an orphan lock for explicit operator recovery.
             if established:
+                require_ownership()
                 try:
-                    current = lock.lstat()
-                    if (lock.is_symlink()
-                        or (current.st_dev, current.st_ino) !=
-                            (identity.st_dev, identity.st_ino)
-                        or lock.read_text(encoding="ascii").strip()
-                            != f"pid={os.getpid()} owner={owner}"):
-                        raise AuditError("Audit lock ownership changed")
                     lock.unlink()
                 except OSError as exc:
                     raise AuditError("Cannot safely release audit lock") from exc
