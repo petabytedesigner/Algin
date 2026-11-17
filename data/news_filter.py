@@ -95,7 +95,7 @@ class NewsFilter:
             covered_start, covered_end, covered_currencies,
         )
 
-    def _fetch(self, *, now=None):
+    def _fetch(self):
         static = getattr(config, "STATIC_NEWS_LIST", None)
         static_fetched = getattr(config, "STATIC_NEWS_FETCHED_AT", None)
         if static is not None:
@@ -127,7 +127,7 @@ class NewsFilter:
             try:
                 return fetch_fmp_calendar(
                     api_key=api_key,
-                    now=utc_now() if now is None else now,
+                    now=utc_now(),
                 )
             except FmpCalendarError as exc:
                 raise NewsUnavailable("FMP economic calendar unavailable or unverified") from None
@@ -188,7 +188,7 @@ class NewsFilter:
         self._fetched_at = None
         self._source_identity = None
         self._coverage = None
-        payload = self._fetch(now=current)
+        payload = self._fetch()
         events, fetched, coverage = self._verify(payload, current, self.max_age)
         self._events = events
         self._fetched_at = fetched
