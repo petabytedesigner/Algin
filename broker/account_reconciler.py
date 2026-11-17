@@ -111,6 +111,70 @@ class AccountReconciler:
             raise ReconcileError("Malformed OANDA full account snapshot") from exc
 
     @staticmethod
+    def _verified_protective_orders(orders, broker_trades, owned_ids, saved_trades):
+        """Whitelist only exact OANDA SL/TP dependent orders for owned trades.
+
+        The legacy zero-pending snapshot path is left unchanged: the existing
+        trade protection-price checks remain in force. Nonempty inventory is
+        accepted only when its complete SL/TP identities match the full trade
+        representation; never classify an arbitrary pending order as protective.
+        """
+        if not orders:
+            # Preserve the legacy no-ID fixture contract, but reject a full
+            # broker snapshot that references protective order IDs absent
+            # from the actual pending-order inventory.
+            for live in broker_trades.values():
+                for field in (
+                    "stopLossOrder", "takeProfitOrder",
+                    "guaranteedStopLossOrder", "trailingStopLossOrder",
+                ):
+                    if live.get(field + "ID") is not None:
+                        return False
+                    detail = live.get(field)
+                    if isinstance(detail, dict) and detail.get("id") is not None:
+                        return False
+            return True
+        if len(owned_ids) != len(broker_trades) or len(orders) != 2 * len(owned_ids):
+            return False
+        expected = {}
+        try:
+            for trade_id in owned_ids:
+                live = broker_trades[trade_id]
+                record = TradeRecord.from_dict(saved_trades[trade_id])
+                for field, id_field, kind, price in (
+                    ("stopLossOrder", "stopLossOrderID", "STOP_LOSS", record.current_stop),
+                    ("takeProfitOrder", "takeProfitOrderID", "TAKE_PROFIT", record.take_profit),
+                ):
+                    nested = live.get(field)
+                    if not isinstance(nested, dict):
+                        return False
+                    nested_id, summary_id = nested.get("id"), live.get(id_field)
+                    order_id = nested_id if nested_id is not None else summary_id
+                    if (not _txid(order_id)
+                        or (summary_id is not None and summary_id != order_id)
+                        or nested.get("tradeID") != trade_id
+                        or nested.get("type") != kind
+                        or nested.get("state") != "PENDING"
+                        or number(nested.get("price"), "dependent price", positive=True)
+                            != price
+                        or order_id in expected):
+                        return False
+                    expected[order_id] = (trade_id, kind, price)
+            if len(expected) != len(orders):
+                return False
+            for order in orders:
+                match = expected.get(order["id"])
+                if (match is None or order.get("tradeID") != match[0]
+                    or order.get("type") != match[1]
+                    or order.get("state") != "PENDING"
+                    or number(order.get("price"), "pending price", positive=True)
+                        != match[2]):
+                    return False
+        except (KeyError, ValueError, TypeError, AttributeError, LifecycleError):
+            return False
+        return True
+
+    @staticmethod
     def _known_trade(trade, journal):
         """Create initial state ONLY from complete durable order/fill evidence."""
         ext = trade.get("clientExtensions")
@@ -384,6 +448,7 @@ class AccountReconciler:
                 # Malformed broker transactions never advance local cursor.
                 raise ReconcileError("Malformed transaction history: state unchanged") from exc
         blockers = []
+        validated_open = set()
         journal_by_id = {a["attempt_id"]: a for a in attempts}
         for tid, raw in broker_trades.items():
             if tid not in proposed["trades"]:
@@ -407,13 +472,16 @@ class AccountReconciler:
                 if (current != rec.current_units or sl != rec.current_stop
                     or tp != rec.take_profit or rec.closed):
                     raise ReconcileError("Unexpected units/protection state")
+                validated_open.add(tid)
             except (KeyError, TypeError, ValueError):
                 blockers.append("Trade state/protection divergence " + tid)
         for tid, saved in proposed["trades"].items():
             rec = TradeRecord.from_dict(saved)
             if tid not in broker_trades and not rec.closed:
                 blockers.append("Open trade missing without confirmed close " + tid)
-        if orders:
+        if not self._verified_protective_orders(
+            orders, broker_trades, validated_open, proposed["trades"]
+        ):
             blockers.append("Unreconciled pending broker orders")
         if any(
             v["status"] in ("INTENT", "UNKNOWN")
