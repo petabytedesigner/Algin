@@ -1,0 +1,85 @@
+name: Category 12 ONE-SHOT real OANDA Practice demo lifecycle
+on:
+  push:
+    branches:
+      - development/phase-c-category-12-direct-practice-2026-11-17
+    paths:
+      - .github/workflows/category12-one-shot.yml
+permissions:
+  contents: read
+concurrency:
+  group: algin-category12-one-shot-20261117
+  cancel-in-progress: false
+jobs:
+  offline-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Offline one-shot regression, no credentials
+        run: python -m unittest discover -s tests -p 'test_phase_c_category12_real_demo.py' -v
+      - name: Independent broker write gates must remain OFF
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False and _PRACTICE_WRITES_RELEASED is False'
+  real-demo-once:
+    needs: offline-safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Execute guarded one-shot OANDA Practice 20-unit exercise
+        env:
+          ALGIN_PRACTICE_ONE_SHOT_CONFIRM: EXPLICIT_C12_DEMO_ONLY_ONE_SHOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import runpy
+          import config
+          from broker.practice_transport import PRACTICE_API, _PRACTICE_WRITES_RELEASED
+
+          pairs = {}
+          for raw in Path(".env.example").read_text(encoding="utf-8").splitlines():
+              raw = raw.strip()
+              if not raw or raw.startswith("#"):
+                  continue
+              if raw.count("=") != 1:
+                  raise SystemExit("DEMO_CONFIG_INVALID")
+              key, value = map(str.strip, raw.split("=", 1))
+              if key not in ("OANDA_API_TOKEN", "OANDA_ACCOUNT_ID") or key in pairs:
+                  raise SystemExit("DEMO_CONFIG_INVALID")
+              pairs[key] = value
+          if (set(pairs) != {"OANDA_API_TOKEN", "OANDA_ACCOUNT_ID"}
+              or pairs["OANDA_ACCOUNT_ID"] != "101-001-37674492-003"
+              or len(pairs["OANDA_API_TOKEN"]) < 20):
+              raise SystemExit("DEMO_CONFIG_ACCOUNT_OR_TOKEN_INVALID")
+          if (config.OANDA_URL != PRACTICE_API
+              or config.ORDER_WRITES_ENABLED is not False
+              or _PRACTICE_WRITES_RELEASED is not False):
+              raise SystemExit("DEMO_WRITES_NOT_ISOLATED")
+          os.environ.update(pairs)
+          config.API_KEY = pairs["OANDA_API_TOKEN"]
+          config.ACCOUNT_ID = pairs["OANDA_ACCOUNT_ID"]
+          print("ONE_SHOT_PRACTICE_DEMO_STARTED")
+          runpy.run_module("broker.practice_one_shot_runner", run_name="__main__")
+          PY
+      - name: Upload sanitized, fsynced test action journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algin-category12-one-shot-evidence
+          path: .local/category12_one_shot.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
