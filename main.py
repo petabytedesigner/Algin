@@ -26,7 +26,7 @@ from storage.lifecycle_state import StateError
 from storage.intent_journal import JournalError
 from execution.trade_executor import BrokerDataError, TradeExecutor
 from risk.risk_engine import Grade, RiskConfig, RiskEngine, TradeCandidate
-from risk.trade_plan import RiskPolicy, TradePlanner
+from risk.trade_plan import InstrumentRules, RiskPolicy, TradePlanner
 from strategy.strategy import Strategy
 from utils.time_tools import utc_now
 
@@ -188,10 +188,26 @@ def _scan_once(cycle: str) -> int:
     # pending orders and outcome-unknown attempts require reconciliation.
     # Signals here are observations, never an ACCEPTED risk decision.
     data = DataHandler()
+    # Do not treat a configured symbol as tradable until the broker confirms
+    # its account-specific instrument metadata in this scan generation.
+    # A failed catalog GET cannot be repaired by a valid pricing response.
+    catalog = data.get_account_instruments()
+    if not isinstance(catalog, dict):
+        record("ENTRY_DENIED", "INSTRUMENT_CATALOG_UNVERIFIED")
+        heartbeat.write(
+            "BLOCKED", reason_code="INSTRUMENT_CATALOG_UNVERIFIED",
+            cycle_id=cycle,
+        )
+        return 3
     strategy = Strategy()
     gate = CandleGate(config.ACCOUNT_ID)
     calendar = build_news_filter()
     for instrument in INSTRUMENTS:
+        rules = catalog.get(instrument)
+        if not isinstance(rules, InstrumentRules) or rules.kind != "CURRENCY":
+            record("ENTRY_DENIED", "INSTRUMENT_NOT_AUTHORIZED",
+                   instrument=instrument)
+            continue
         # Historical V10 inputs; category 5 must validate completed candles.
         candles = data.get_candles(instrument, "M15", 200)
         if not candles or len(candles) < 50:
@@ -208,7 +224,7 @@ def _scan_once(cycle: str) -> int:
             record("ENTRY_DENIED","M15_INVALID",instrument=instrument)
             continue
         # Do not consume the candle when the instrument is not tradeable.
-        quote = data.get_price(instrument)
+        quote = data.get_price(instrument, rules=rules)
         if not MarketSessions().instrument_tradeable(
             instrument, now=now, broker_tradeable=quote is not None,
             require_session=config.ENABLE_SESSIONS,

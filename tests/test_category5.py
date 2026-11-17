@@ -26,6 +26,7 @@ from data.data_handler import DataHandler
 from data.market_sessions import MarketSessions
 from data.news_filter import NewsFilter
 from risk.scoring_engine import ScoringConfig, ScoringEngine
+from risk.trade_plan import InstrumentRules
 from strategy.breakout_retest import BreakoutRetest
 from strategy.strategy import Strategy
 from strategy.structure_engine import StructureEngine
@@ -343,8 +344,23 @@ class NewsTests(unittest.TestCase):
         self.now = datetime(2026, 11, 15, 10, tzinfo=timezone.utc)
 
     def provider(self, events=None, *, fetched=None):
-        return {"fetched_at": fetched or iso_utc(self.now),
-                "events": [] if events is None else events}
+        return {
+            "fetched_at": fetched or iso_utc(self.now),
+            "events": [] if events is None else events,
+            "coverage_start": iso_utc(self.now - timedelta(hours=2)),
+            "coverage_end": iso_utc(self.now + timedelta(hours=2)),
+            "currencies": ["EUR", "USD", "GBP", "JPY"],
+        }
+
+    def fixture_source(self, payload):
+        return patch.multiple(
+            config, create=True,
+            STATIC_NEWS_LIST=payload["events"],
+            STATIC_NEWS_FETCHED_AT=payload["fetched_at"],
+            STATIC_NEWS_COVERAGE_START=payload["coverage_start"],
+            STATIC_NEWS_COVERAGE_END=payload["coverage_end"],
+            STATIC_NEWS_CURRENCIES=payload["currencies"],
+        )
 
     def high(self, when):
         return {"time": iso_utc(when), "impact": "HIGH",
@@ -359,20 +375,13 @@ class NewsTests(unittest.TestCase):
     def test_P56_valid_zero_events_means_verified_clear(self):
         news = NewsFilter()
         payload = self.provider()
-        with patch.object(config, "STATIC_NEWS_LIST", payload["events"], create=True), (
-            patch.object(config, "STATIC_NEWS_FETCHED_AT",
-                         payload["fetched_at"], create=True)
-        ):
+        with self.fixture_source(payload):
             self.assertIsNone(news.block_trading("EUR_USD", self.now))
 
     def test_P56_UTC_news_lockout_precisely_at_bounds(self):
         news = NewsFilter()
         event = self.high(self.now + timedelta(minutes=30))
-        with (
-            patch.object(config, "STATIC_NEWS_LIST", [event], create=True),
-            patch.object(config, "STATIC_NEWS_FETCHED_AT",
-                         iso_utc(self.now), create=True)
-        ):
+        with self.fixture_source(self.provider([event])):
             self.assertIn("HIGH-impact", news.block_trading("EUR_USD", self.now))
             self.assertIsNone(news.block_trading(
                 "GBP_JPY", self.now
@@ -390,12 +399,7 @@ class NewsTests(unittest.TestCase):
         ]
         for payload in bad_events:
             news = NewsFilter()
-            with (
-                patch.object(config, "STATIC_NEWS_LIST",
-                             payload["events"], create=True),
-                patch.object(config, "STATIC_NEWS_FETCHED_AT",
-                             payload["fetched_at"], create=True)
-            ):
+            with self.fixture_source(payload):
                 self.assertIn("NEWS_UNKNOWN",
                               news.block_trading("EUR_USD", self.now))
 
@@ -412,6 +416,12 @@ class NewsTests(unittest.TestCase):
 
 
     def test_P52_scan_runs_strategy_only_once_per_new_M15(self):
+        rules = InstrumentRules(
+            "EUR_USD", "CURRENCY", -4, 5, 0,
+            Decimal("1"), Decimal("1000000"), Decimal("0"),
+            Decimal("0.02"),
+        )
+
         from execution.trade_executor import TradeExecutor
         signals = SimpleNamespace(
             instrument="EUR_USD", direction="LONG", grade="B", score=70
@@ -431,6 +441,9 @@ class NewsTests(unittest.TestCase):
             ):
                 sessions.return_value.can_trade.return_value = True
                 sessions.return_value.instrument_tradeable.return_value = True
+                data.return_value.get_account_instruments.return_value = {
+                    "EUR_USD": rules
+                }
                 data.return_value.get_candles.side_effect = (
                     lambda symbol, *args:
                     candles() if symbol == "EUR_USD" else None
@@ -452,6 +465,12 @@ class NewsTests(unittest.TestCase):
                 )
 
     def test_P54_no_broker_price_does_not_consume_candle(self):
+        rules = InstrumentRules(
+            "EUR_USD", "CURRENCY", -4, 5, 0,
+            Decimal("1"), Decimal("1000000"), Decimal("0"),
+            Decimal("0.02"),
+        )
+
         from execution.trade_executor import TradeExecutor
         with TemporaryDirectory() as directory:
             gate = CandleGate("test-account", directory=directory)
@@ -469,6 +488,9 @@ class NewsTests(unittest.TestCase):
                 sessions.return_value.instrument_tradeable.side_effect = (
                     lambda *args, **kw: kw["broker_tradeable"]
                 )
+                data.return_value.get_account_instruments.return_value = {
+                    "EUR_USD": rules
+                }
                 data.return_value.get_candles.side_effect = (
                     lambda symbol, *args:
                     candles() if symbol == "EUR_USD" else None
@@ -512,11 +534,7 @@ class NewsTests(unittest.TestCase):
 
     def test_P56_cache_invalidated_when_static_source_changes(self):
         news = NewsFilter()
-        with (
-            patch.object(config, "STATIC_NEWS_LIST", [], create=True),
-            patch.object(config, "STATIC_NEWS_FETCHED_AT",
-                         iso_utc(self.now), create=True)
-        ):
+        with self.fixture_source(self.provider()):
             self.assertEqual(news.load_news(now=self.now), [])
             config.STATIC_NEWS_LIST = [self.high(self.now)]
             refreshed = news.load_news(now=self.now)

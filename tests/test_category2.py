@@ -418,6 +418,7 @@ class TradePlanningTests(unittest.TestCase):
         # A successful GET /openTrades does not prove that the account has
         # no pending orders or unresolved order-submission attempts.
         from execution.trade_executor import TradeExecutor
+        from risk.trade_plan import InstrumentRules
 
         synthetic_signal = SimpleNamespace(
             instrument="EUR_USD", direction="LONG", grade="A", score=85
@@ -439,6 +440,13 @@ class TradePlanningTests(unittest.TestCase):
         ):
             sessions.return_value.can_trade.return_value = True
             checkpoint.return_value.claim.return_value = True
+            data.return_value.get_account_instruments.return_value = {
+                "EUR_USD": InstrumentRules(
+                    "EUR_USD", "CURRENCY", -4, 5, 0,
+                    Decimal("1"), Decimal("1000000"), Decimal("0"),
+                    Decimal("0.02"),
+                )
+            }
             data.return_value.get_candles.side_effect = (
                 lambda instrument, *args:
                 candles if instrument == "EUR_USD" else None
