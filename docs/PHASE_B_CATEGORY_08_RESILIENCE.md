@@ -38,9 +38,9 @@ Randomizimi eshte me seed konstant per riprodhim; nuk eshte Hypothesis i pafund,
 
 ## 4. CI e re
 
-`.github/workflows/category8.yml` ekzekuton Python 3.11, `compileall`, bllokimet e shkrimit, **te gjithe** `unittest` me `coverage --branch`, raport te modulit kryesor me prag minimal **70%** dhe `main.py --check`. Paketa `coverage` instalohet vetem ne GitHub CI; `requirements.txt` dhe kontratat runtime nuk ndryshohen.
+`.github/workflows/category8.yml` ekzekuton Python 3.11, `compileall`, bllokimet e shkrimit, **te gjithe** `unittest` me `coverage --branch`, raport te modulit kryesor me prag minimal **80%** dhe `main.py --check`. Paketa `coverage` instalohet vetem ne GitHub CI; `requirements.txt` dhe kontratat runtime nuk ndryshohen.
 
-Ky prag eshte minimum i fazes B, jo certifikim i plote i çdo dege kritike. Raporti shfaq perqindjen reale ne CI; branch/decision coverage me nivele me te larta dhe mutation-testing mund te permiresohen ne kategori pasuese. `coverage` eshte matje strukturore, jo prove e korrektesise ekonomike.
+Pragu 80% mat mbulimin e perbashket te gjashte moduleve; nuk kerkon 80% per secilin modul veçmas. Raporti i pare i PR dha 82% total, por çdo ndryshim i commit-it kerkon CI te ri. Ky prag eshte minimum i fazes B, jo certifikim i plote i çdo dege kritike. Raporti shfaq perqindjen reale ne CI; branch/decision coverage me nivele me te larta dhe mutation-testing mund te permiresohen ne kategori pasuese. `coverage` eshte matje strukturore, jo prove e korrektesise ekonomike.
 
 ## 5. Kufij operacionalë
 
