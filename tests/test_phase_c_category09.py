@@ -210,8 +210,20 @@ class ScoringAndGradeTests(unittest.TestCase):
         self.assertEqual(engine.last_rejection_reason,
                          "GRADE_NOT_TRADEABLE")
 
-    def test_normal_fixture_remains_tradeable_and_deterministic(self):
+    def test_original_pattern_penalized_fixture_is_grade_c_blocked(self):
         engine = Strategy()
+        self.assertIsNone(engine.evaluate_signal(
+            "EUR_USD", "LONG", candles(), 1.1020, 1.1008,
+            .001, 1.0, 1.2, NOW,
+        ))
+        self.assertEqual(engine.last_rejection_reason, "GRADE_NOT_TRADEABLE")
+
+    def test_valid_b_fixture_is_tradeable_and_deterministic(self):
+        # Make only the synthetic fixture's score policy permissive enough
+        # to isolate BOS/retest determinism; production remains 80/60/40.
+        engine = Strategy(scoring_config=ScoringConfig(
+            grade_c_min=0, grade_b_min=50, grade_a_min=80,
+        ))
         first = engine.evaluate_signal(
             "EUR_USD", "LONG", candles(), 1.1020, 1.1008,
             .001, 1.0, 1.2, NOW,
