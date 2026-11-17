@@ -391,6 +391,17 @@ def replay(payload, rules: InstrumentRules, evidence, *,
                     blocked["PLANNER_OR_PREFLIGHT_BLOCK"] += 1
 
         if open_pos is not None:
+            # An unavailable exit market or a missing M15 interval makes
+            # the actual trade outcome unknowable. Never manufacture a
+            # favorable fill, or even an assumed conservative loss, from
+            # discontinuous evidence. Preserve the position as unresolved.
+            if fact["broker_tradeable"] is not True:
+                blocked["OPEN_TRADE_BROKER_UNTRADEABLE"] += 1
+                break
+            if (i > 0 and bar.time - bars[i - 1].time
+                    != timedelta(minutes=15)):
+                blocked["OPEN_TRADE_PRICE_HISTORY_GAP"] += 1
+                break
             pos = open_pos
             side = bar.bid if pos.plan.direction == "LONG" else bar.ask
             sign = 1 if pos.plan.direction == "LONG" else -1
