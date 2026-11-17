@@ -123,7 +123,7 @@ class FakeBroker:
                     "id": "102", "type": "ORDER_FILL",
                     "tradeReduced": {
                         "tradeID": "1001",
-                        "units": "9" if self.bad_partial else "10",
+                        "units": "-9" if self.bad_partial else "-10",
                     },
                 }
                 self.trade["currentUnits"] = "10"
@@ -135,7 +135,7 @@ class FakeBroker:
             else:
                 fill = {"id": "103", "type": "ORDER_FILL",
                         "tradesClosed": [{
-                            "tradeID": "1001", "units": "10",
+                            "tradeID": "1001", "units": "-10",
                         }]}
                 self.trade = None
                 self.transactions["103"] = {
