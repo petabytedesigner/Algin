@@ -218,6 +218,9 @@ class ForwardSupervisor:
             proc = None
             output = None
             try:
+                # Durable START exists even when process spawn itself fails.
+                journal.emit("START", "SUPERVISOR_LAUNCHING",
+                             pid=os.getpid(), now=self.clock())
                 output = _new_runtime_log(journal)
                 proc = self.launcher(
                     [sys.executable, "-u", "main.py"],
@@ -226,7 +229,6 @@ class ForwardSupervisor:
                     stderr=subprocess.STDOUT,
                 )
                 started = self.clock()
-                journal.emit("START", "OBSERVE_ONLY", pid=proc.pid, now=started)
                 valid = 0
                 polls = 0
                 while True:
@@ -270,9 +272,10 @@ class ForwardSupervisor:
                                  pid=proc.pid, now=self.clock())
                 return 0
             except (OSError, ForwardBlocked, ForwardEvidenceError):
-                if proc is not None and not journal.terminal:
+                if not journal.terminal:
                     journal.emit("BLOCKED", "SUPERVISOR_RUNTIME_ERROR",
-                                 pid=proc.pid, now=self.clock())
+                                 pid=proc.pid if proc is not None
+                                     else os.getpid(), now=self.clock())
                 raise
             finally:
                 self._terminate(proc)
