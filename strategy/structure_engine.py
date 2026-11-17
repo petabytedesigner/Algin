@@ -32,6 +32,45 @@ class StructureEngine:
         quality = self._structure_quality(swings)
         return StructureResult(bos, choch, direction, swings, quality)
 
+    def detect_breakout(
+        self, candles: List[dict], *, breakout_index: int,
+        pivot_index: int, pivot_price: float, direction: str,
+    ) -> StructureResult:
+        """Validate BOS against the EXACT pivot selected by BreakoutRetest.
+
+        The pivot must have two right-hand CLOSED candles before the breakout
+        bar. A newer pivot completed by the breakout candle itself cannot
+        silently replace the original pivot used for the breakout zone.
+        """
+        empty = StructureResult(False, False, None, [], 0.0)
+        if (direction not in ("LONG", "SHORT")
+            or type(breakout_index) is not int
+            or type(pivot_index) is not int
+            or not 5 <= breakout_index < len(candles)
+            or not 2 <= pivot_index <= breakout_index - 3):
+            return empty
+        prior = self._find_swings(candles[:breakout_index])
+        eligible = [
+            swing for swing in prior
+            if swing.is_high == (direction == "LONG")
+        ]
+        if not eligible:
+            return StructureResult(False, False, None, prior,
+                                   self._structure_quality(prior))
+        chosen = eligible[-1]
+        if chosen.index != pivot_index or chosen.price != pivot_price:
+            return StructureResult(False, False, None, prior,
+                                   self._structure_quality(prior))
+        bos, choch, resolved = self._detect_breaks(
+            candles[:breakout_index + 1], prior
+        )
+        expected = "UP" if direction == "LONG" else "DOWN"
+        if not bos or resolved != expected:
+            return StructureResult(False, False, None, prior,
+                                   self._structure_quality(prior))
+        return StructureResult(True, choch, resolved, prior,
+                               self._structure_quality(prior))
+
     def _find_swings(self, candles: List[dict]) -> List[SwingPoint]:
         result = []
         if len(candles) < 6:
