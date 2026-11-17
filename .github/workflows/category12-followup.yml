@@ -64,6 +64,15 @@ jobs:
               "cursor": state.get("lastTransactionID"),
               "trades": trades,
           },sort_keys=True))
+          if any(t["id"] == "6" for t in trades):
+              detail=read("/trades/6").get("trade",{})
+              print("BROKER_TRADE_6_PROTECTION "+json.dumps({
+                  "state":detail.get("state"),
+                  "currentUnits":detail.get("currentUnits"),
+                  "ownerIdMatch":(detail.get("clientExtensions") or {}).get("id")=="algin-c12-20261117-once",
+                  "stopLossPrice":(detail.get("stopLossOrder") or {}).get("price"),
+                  "takeProfitPrice":(detail.get("takeProfitOrder") or {}).get("price"),
+              },sort_keys=True))
           tx = read("/transactions/sinceid", {"id": "6"})
           public=[]
           for item in tx.get("transactions", []):
