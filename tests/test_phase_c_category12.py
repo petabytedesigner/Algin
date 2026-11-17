@@ -260,11 +260,12 @@ class ProbeTests(unittest.TestCase):
                   "OANDA_PRACTICE_EXPECTED_ACCOUNT_ID": ACCOUNT,
               }),
               patch("sys.stdout", new_callable=io.StringIO) as output):
-            # Unhandled constructor error is not part of our broker HTTP
-            # threat model, so this test checks _get, not the CLI.
-            with self.assertRaises(ValueError):
-                main()
-            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(main(), 3)
+            output_record = json.loads(output.getvalue())
+            self.assertEqual(output_record["reason"], "UNEXPECTED_PROBE_ERROR")
+            self.assertEqual(output_record["broker_mutations"], 0)
+            self.assertNotIn("real token", output.getvalue())
+            self.assertNotIn("URL", output.getvalue())
 
 
 if __name__ == "__main__":
