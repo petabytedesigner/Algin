@@ -42,6 +42,6 @@ Kalendar bosh, por pa mbulim kohor/valutor, është `NEWS_UNKNOWN`, jo `NEWS_CLE
 
 `tests/test_phase_c_category10.py` përmban 28 teste offline: katalogu i llogarisë, metadata FX, instrumente të dyfishta, cursor i pavlefshëm, spreade mbi kufi, precision, çmime stale/future/locked, calendar bosh me dhe pa mbulim, dy monedhat, kufijtë e lockout-it, ndryshimi i cache-it, burim HTTPS i pamiratuar dhe izolimi i scan-it pa katalog.
 
-`tests/test_category5.py` përditëson **vetëm fixtures sintetike** për të ruajtur kontratën e re të katalogut dhe të mbulimit të lajmeve. Të gjithë regresionet ekzistuese duhet të kalojnë dhe dokumentimi zyrtar duhet të mbetet autoritar.
+`tests/test_category5.py` dhe `tests/test_category2.py` përditësojnë **vetëm fixtures sintetike** të skanimit për të ruajtur kontratën e re të katalogut dhe të mbulimit të lajmeve. Të gjithë regresionet ekzistuese duhet të kalojnë dhe dokumentimi zyrtar duhet të mbetet autoritar.
 
 **Merge gate:** të gjithë workflow-t në commit-in final të PR, listë skedarësh brenda fushës, bazë SHA e pandryshuar dhe CI pas merge. Testet offline nuk nënkuptojnë verifikim real të llogarisë apo release për porosi.
