@@ -40,7 +40,9 @@ class Strategy:
 
     def __init__(self, scoring_config: Optional[ScoringConfig] = None):
         self.structure_engine = StructureEngine()
-        self.breakout_retest = BreakoutRetest(expiry_bars=4)
+        # One policy source: config.MAX_RETEST_BARS, including for direct
+        # BreakoutRetest callers. No hidden per-strategy expiry constant.
+        self.breakout_retest = BreakoutRetest()
         self.retest_engine = RetestEngine()
         self.trend_engine = TrendEngine()
         self.ema_engine = EMAEngine()
@@ -94,8 +96,10 @@ class Strategy:
             return self._reject("BREAKOUT_RETEST_MISSING")
         # All structural evidence must exist *by the breakout candle*, not
         # be added retroactively by the retest/signal candle.
-        structure = self.structure_engine.detect(
-            clean[:sequence.breakout_index + 1]
+        structure = self.structure_engine.detect_breakout(
+            clean, breakout_index=sequence.breakout_index,
+            pivot_index=sequence.pivot_index,
+            pivot_price=sequence.pivot_price, direction=direction,
         )
         if not structure.bos or structure.direction != wanted:
             return self._reject("STRUCTURE_NOT_CONFIRMED")
@@ -133,8 +137,11 @@ class Strategy:
             grade = self.scoring.grade_from_score(score)
         except ValueError:
             return self._reject("SCORING_INVALID")
-        if score < self.scoring.config.grade_c_min:
+        if grade == "D":
             return self._reject("SCORE_BELOW_THRESHOLD")
+        if grade not in ("A", "B"):
+            # Grade C is observational only, never an executable signal.
+            return self._reject("GRADE_NOT_TRADEABLE")
         reason = ["CHoCH" if structure.choch else "BOS",
                   "Breakout->Retest", f"Trend {trend.direction}"]
         if patterns.quality < 1:
