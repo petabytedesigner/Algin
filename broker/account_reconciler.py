@@ -193,7 +193,15 @@ class AccountReconciler:
                     trade = TradeRecord.from_dict(state["trades"][trade_id])
                     if trade.closed:
                         raise ReconcileError("Confirmed close on already-closed trade")
-                    amount = number(item["units"], "closing units", zero_ok=False).copy_abs()
+                    signed_close = number(
+                        item["units"], "closing units", zero_ok=False
+                    )
+                    # OANDA effects carry the opposing order-side units:
+                    # negative to reduce a LONG, positive to reduce a SHORT.
+                    # Never normalize a same-direction broker effect by abs().
+                    if signed_close * trade.current_units >= 0:
+                        raise ReconcileError("Close units do not oppose open trade")
+                    amount = signed_close.copy_abs()
                     if amount > abs(trade.current_units):
                         raise ReconcileError("Close exceeds known remaining units")
                     sign = 1 if trade.direction == "LONG" else -1
