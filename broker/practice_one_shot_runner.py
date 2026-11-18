@@ -17,14 +17,13 @@ from broker.execution_result import classify_response, Outcome
 from broker.execution_validation import parse_market_quote
 from broker.practice_readonly_probe import PracticeReadOnlyProbe
 from broker.practice_demo_adapter import (
-    DemoAdapter, DemoBlocked, ACCOUNT, ATTEMPT,
+    DemoAdapter, DemoBlocked, ACCOUNT, ATTEMPT, ARM,
 )
 from risk.trade_plan import number
 from utils.time_tools import utc_now
 
 UNITS = Decimal("20")
 HARD_RISK_USD = Decimal("0.25")
-ARM = "EXPLICIT_C12_DEMO_ONLY_ONE_SHOT"
 
 
 def expected_absence(adapter):
@@ -112,6 +111,7 @@ def exercise(adapter, *, verify_network=True):
     payload, rules, quote, stop, target, bound = preflight(
         adapter, verify_network=verify_network
     )
+    adapter.authorize_one_shot(payload)
     adapter.log(
         "PREFLIGHT_REAL_PRACTICE_PASS",
         spread_pips=str(quote.spread_pips), units="20",
