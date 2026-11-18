@@ -36,6 +36,7 @@ class ReconcileReport:
     blocked_reasons: tuple[str, ...]
     new_closed_trade_ids: tuple[str, ...]
     entry_allowed: bool = False
+    verified_protective_order_ids: tuple[str, ...] = ()
 
 
 class AccountReconciler:
@@ -557,9 +558,10 @@ class AccountReconciler:
             rec = TradeRecord.from_dict(saved)
             if tid not in broker_trades and not rec.closed:
                 blockers.append("Open trade missing without confirmed close " + tid)
-        if not self._verified_protective_orders(
+        protections_verified = self._verified_protective_orders(
             orders, broker_trades, validated_open, proposed["trades"]
-        ):
+        )
+        if not protections_verified:
             blockers.append("Unreconciled pending broker orders")
         if any(
             v["status"] in ("INTENT", "UNKNOWN")
@@ -606,4 +608,7 @@ class AccountReconciler:
                 and not any(tid in issue for issue in blockers)
             )), tuple(blockers), tuple(new_closures),
             entry_allowed=False,
+            verified_protective_order_ids=tuple(sorted(
+                (order["id"] for order in orders), key=int
+            )) if protections_verified else (),
         )
