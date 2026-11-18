@@ -402,6 +402,12 @@ class OneShotTests(unittest.TestCase):
         statuses = [json.loads(x)["status"] for x in self.path.read_text().splitlines()]
         self.assertIn("PRACTICE_BREAK_EVEN_CONFIRMED", statuses)
 
+    def test_demo_evidence_never_contains_broker_credentials(self):
+        self.assertEqual(exercise(self.adapter, verify_network=False), "CONFIRMED")
+        journal = self.path.read_text(encoding="utf-8")
+        self.assertNotIn(config.API_KEY, journal)
+        self.assertNotIn(ACCOUNT, journal)
+
 
 if __name__ == "__main__":
     unittest.main()
