@@ -221,6 +221,81 @@ class AccountReconciler:
         except (KeyError, TypeError, ValueError, LifecycleError) as exc:
             raise ReconcileError("Cannot recover complete trade lifetime from journal") from exc
 
+    @classmethod
+    def _admit_postbootstrap_trades(cls, state, broker_trades, attempts, transactions):
+        """Admit new open trades only from journal + fresh fill + live proof.
+
+        The candidate records and since-ID cursor are committed together by
+        run(). An unconfirmed/closed-before-observation fill fails closed.
+        """
+        fills = {}
+        for tx in transactions:
+            opened = tx.get("tradeOpened") if tx.get("type") == "ORDER_FILL" else None
+            if opened is not None:
+                if not isinstance(opened, dict) or not _txid(opened.get("tradeID")):
+                    raise ReconcileError("Malformed new trade opening transaction")
+                fills.setdefault(opened["tradeID"], []).append(tx)
+
+        entries = {a["attempt_id"]: a for a in attempts}
+        new = {}
+        blockers = []
+        for tid, trade in broker_trades.items():
+            if tid in state["trades"]:
+                continue
+            try:
+                record = cls._known_trade(trade, attempts)
+                entry = entries[record.attempt_id]
+                order = entry["request"]["order"]
+                match = fills.get(tid, [])
+                if (entry.get("retired") is True or len(match) != 1
+                    or not _txid(entry.get("order_id"))
+                    or order.get("type") != "MARKET"
+                    or order.get("timeInForce") != "FOK"
+                    or order.get("positionFill") != "OPEN_ONLY"
+                    or order.get("clientExtensions") != {
+                        "id": record.attempt_id, "tag": "algin",
+                        "comment": entry["signal_id"],
+                    }
+                    or order.get("tradeClientExtensions") != {
+                        "id": record.attempt_id, "tag": "algin",
+                        "comment": entry["signal_id"],
+                    }
+                    or number(order.get("units"), "requested units", zero_ok=False)
+                        != record.initial_units):
+                    raise ReconcileError("New trade has no unique original order proof")
+                tx = match[0]
+                opened = tx["tradeOpened"]
+                if (tx.get("orderID") != entry["order_id"]
+                    or tx.get("clientOrderID", record.attempt_id) != record.attempt_id
+                    or tx.get("instrument") != record.instrument
+                    or tx.get("reason", "MARKET_ORDER") != "MARKET_ORDER"
+                    or tx.get("tradeReduced") is not None
+                    or tx.get("tradesClosed", []) != []
+                    or number(tx.get("units"), "fill units", zero_ok=False)
+                        != record.initial_units
+                    or number(opened.get("units"), "opened units", zero_ok=False)
+                        != record.initial_units
+                    or number(opened.get("price"), "opened price", positive=True)
+                        != record.entry_price
+                    or parse_utc(tx["time"]) != record.opened_at):
+                    raise ReconcileError("New trade fill disagrees with durable order")
+                new[tid] = record.to_dict()
+            except (ReconcileError, LifecycleError, KeyError, ValueError,
+                    TypeError, AttributeError):
+                blockers.append("Unverified post-bootstrap trade " + tid)
+
+        # A confirmed opening which disappeared before its first lifecycle
+        # commit cannot be counted as a known closed trade by inference.
+        for attempt in attempts:
+            if (attempt["status"] == "FILLED"
+                and attempt.get("retired") is not True
+                and attempt.get("trade_id") not in state["trades"]
+                and attempt.get("trade_id") not in new):
+                blockers.append("Journal fill missing from lifecycle and live inventory")
+        if not blockers:
+            state["trades"].update(new)
+        return blockers
+
     @staticmethod
     def _apply_transactions(state, transactions, target_cursor):
         """Consume only unprocessed typed transaction evidence, never duplicates."""
@@ -428,6 +503,7 @@ class AccountReconciler:
             }
         )
         new_closures = []
+        txs = ()
         if cursor != persisted["cursor"]:
             payload = self._read("/transactions/sinceid", {"id": persisted["cursor"]})
             try:
@@ -447,7 +523,9 @@ class AccountReconciler:
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
                 # Malformed broker transactions never advance local cursor.
                 raise ReconcileError("Malformed transaction history: state unchanged") from exc
-        blockers = []
+        blockers = self._admit_postbootstrap_trades(
+            proposed, broker_trades, attempts, txs
+        )
         validated_open = set()
         journal_by_id = {a["attempt_id"]: a for a in attempts}
         for tid, raw in broker_trades.items():
