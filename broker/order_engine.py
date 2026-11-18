@@ -267,12 +267,37 @@ class OrderEngine:
                 reason="Terminal local journal; no resend"
             )
         if record["status"] == "FILLED":
-            # A protection problem may only be rechecked, not retried as an order.
+            # A crash after the FILLED journal commit but before the protection
+            # marker can be recovered with GET-only broker evidence. Never POST
+            # the original order again or promote a malformed fill to managed.
+            if record.get("protection_verified") is not True:
+                try:
+                    if (not _strict_id(record.get("trade_id"))
+                        or not _strict_id(record.get("order_id"))
+                        or record.get("trade_reduced") is not None
+                        or record.get("trades_closed")):
+                        raise ValueError("Missing durable broker identity")
+                    recovered = ExecutionResult(
+                        Outcome.FILLED, attempt_id,
+                        order_id=record["order_id"],
+                        trade_id=record["trade_id"],
+                        filled_units=number(
+                            record.get("filled_units"), "filled units", zero_ok=False
+                        ),
+                        fill_price=number(
+                            record.get("fill_price"), "fill price", positive=True
+                        ),
+                    )
+                    return self._postfill_protection(recovered, record["request"])
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    pass
             return ExecutionResult(
                 Outcome.FILLED, attempt_id,
                 trade_id=record.get("trade_id"),
                 protection_verified=record.get("protection_verified", False),
-                reason="Existing fill journal; no resend"
+                reason="Existing fill journal; protection unverified; no resend"
+                if record.get("protection_verified") is not True
+                else "Existing fill journal; no resend"
             )
         try:
             response = self._read("/orders/@" + attempt_id)
