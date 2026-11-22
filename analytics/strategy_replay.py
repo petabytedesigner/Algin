@@ -31,6 +31,7 @@ from execution.trade_coordinator import stable_signal_id
 from risk.trade_lifecycle import TradeRecord
 from risk.trade_plan import (
     AccountFunds, ExposureBook, InstrumentRules, LossState,
+    advance_loss_streak,
     PlanRejected, QuoteConversions, TradePlanner,
 )
 from strategy.strategy import Strategy
@@ -510,14 +511,12 @@ def replay(payload, rules: InstrumentRules, evidence, *,
                     blocked["NONPOSITIVE_RESEARCH_EQUITY"] += 1
                     break
                 peak = max(peak, equity)
+                streak = advance_loss_streak(streak, net)
                 if net < 0:
                     daily_loss += -net
-                    streak += 1
                     cooldown[rules.instrument] = (
                         bar.time + timedelta(minutes=45)
                     )
-                elif net > 0:
-                    streak = 0
                 open_pos = None
 
         if i < 49 or i == len(bars) - 1 or open_pos is not None:

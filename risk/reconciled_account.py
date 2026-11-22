@@ -17,7 +17,7 @@ from broker.financial_ledger import FinancialEvidenceError, summary, trade_summa
 from risk.trade_lifecycle import TradeRecord
 from risk.trade_plan import (
     AccountFunds, ExposureBook, ExposureReservation, LossState,
-    PlanRejected, number,
+    PlanRejected, advance_loss_streak, number,
 )
 from utils.time_tools import parse_utc, require_utc
 
@@ -235,7 +235,21 @@ def _transaction_downside(event):
 
     One profitable ORDER_FILL can include a losing trade. Count verified
     losing trade legs without double-counting account-level cash debits.
+    Valid deposits/withdrawals change NAV, not trading P/L or daily losses.
     """
+    if event.get("type") == "TRANSFER_FUNDS":
+        components = event.get("components")
+        if (event.get("account_net") is not None
+            or event.get("allocation_complete") is not True
+            or event.get("trade_effects") != []
+            or not isinstance(components, dict)
+            or any(value is not None for value in components.values())):
+            raise RiskEvidenceError("Funds transfer claims trading attribution")
+        try:
+            number(event.get("funds_transfer"), "funds transfer")
+        except PlanRejected as exc:
+            raise RiskEvidenceError("Unverified funds transfer amount") from exc
+        return Decimal("0")
     value = event.get("account_net")
     if value is None:
         raise RiskEvidenceError("Financial transaction lacks net cash evidence")
@@ -310,15 +324,13 @@ def _losses_from_anchor(account, state, anchor, *, now):
         key: parse_utc(value) for key, value in state.get("cooldowns", {}).items()
     }
     for closed_at, _, trade_id, net in closes:
+        streak = advance_loss_streak(streak, net)
         if net < 0:
-            streak += 1
             symbol = state["closed_results"][trade_id]["instrument"]
             until = closed_at + timedelta(minutes=30)
             previous = cooldown.get(symbol)
             if previous is None or until > previous:
                 cooldown[symbol] = until
-        else:
-            streak = 0
     return LossState(
         peak_nav=anchor.peak_nav,
         consecutive_losses=streak, verified=True,
