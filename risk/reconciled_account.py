@@ -95,7 +95,8 @@ def _attempt_reservation(entry, *, status):
         raise RiskEvidenceError("Invalid journal risk reservation") from exc
 
 
-def _snapshot_exposure(account, state, attempts, broker_trades, broker_orders):
+def _snapshot_exposure(account, state, attempts, broker_trades, broker_orders,
+                       verified_protective_order_ids=()):
     reasons = []
     reservations = []
     if not isinstance(account, AccountFunds) or not isinstance(state, dict):
@@ -187,10 +188,30 @@ def _snapshot_exposure(account, state, attempts, broker_trades, broker_orders):
     for trade_id, raw in active.items():
         if trade_id not in reserved_trade_ids:
             reasons.append("FOREIGN_OR_UNRESERVED_BROKER_TRADE")
-    if broker_orders:
-        # Existing reconciliation cannot yet attribute all pending orders
-        # to unique, proved reservations; no optimistic risk allocation.
-        reasons.append("UNRECONCILED_PENDING_BROKER_ORDER")
+    if broker_orders or verified_protective_order_ids:
+        # A reconciler report identifies the exact dependent orders, but the
+        # risk layer must independently recheck the *current* broker snapshot.
+        # A forged/stale report or a same-ID order with a changed price/trade
+        # must never acquire a verified exposure book. SL/TP consume no extra
+        # entry reservation; their parent trade is already reserved above.
+        identities_ok = (
+            type(verified_protective_order_ids) is tuple
+            and all(isinstance(x, str) for x in verified_protective_order_ids)
+            and len(set(verified_protective_order_ids))
+                == len(verified_protective_order_ids)
+            and all(isinstance(o, dict) and isinstance(o.get("id"), str)
+                    for o in broker_orders)
+            and len(verified_protective_order_ids) == len(broker_orders)
+            and set(verified_protective_order_ids)
+                == {o["id"] for o in broker_orders}
+        )
+        if identities_ok:
+            from broker.account_reconciler import AccountReconciler
+            identities_ok = AccountReconciler._verified_protective_orders(
+                broker_orders, active, reserved_trade_ids, state["trades"]
+            )
+        if not identities_ok:
+            reasons.append("UNRECONCILED_PENDING_BROKER_ORDER")
     for trade_id, saved in state["trades"].items():
         record = TradeRecord.from_dict(saved)
         if not record.closed and trade_id not in active:
@@ -328,7 +349,8 @@ def build_risk_readiness(
     }:
         reasons.append("OWNED_BROKER_TRADE_REPORT_MISMATCH")
     exposure, exposure_reasons = _snapshot_exposure(
-        account, state, attempts, broker_trades, broker_orders
+        account, state, attempts, broker_trades, broker_orders,
+        getattr(report, "verified_protective_order_ids", ()),
     )
     reasons.extend(exposure_reasons)
     losses, loss_reasons = _losses_from_anchor(
