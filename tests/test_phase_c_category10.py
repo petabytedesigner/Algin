@@ -328,6 +328,7 @@ class ReadOnlyScanTests(unittest.TestCase):
         with (
             patch.object(config, "API_KEY", "synthetic"),
             patch.object(config, "ACCOUNT_ID", "acct-1"),
+            patch("main.utc_now", return_value=NOW),
             patch("main.TradeExecutor") as broker,
             patch("main.DataHandler") as market,
             patch("main.Heartbeat"),
@@ -343,6 +344,7 @@ class ReadOnlyScanTests(unittest.TestCase):
         with (
             patch.object(config, "API_KEY", "synthetic"),
             patch.object(config, "ACCOUNT_ID", "acct-1"),
+            patch("main.utc_now", return_value=NOW),
             patch("main.TradeExecutor") as broker,
             patch("main.DataHandler") as market,
             patch("main.Heartbeat"),
