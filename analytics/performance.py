@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from decimal import Decimal
 from analytics.conservative_backtest import dec, BacktestError
+from risk.trade_plan import advance_loss_streak
 
 
 def _median(values):
@@ -65,14 +66,12 @@ def report(trades, *, starting_equity):
         max_drawdown_pct = max(
             max_drawdown_pct, (peak - equity) / peak * 100
         )
+        loss_streak = advance_loss_streak(loss_streak, amount)
         if amount < 0:
-            loss_streak += 1
             win_streak = 0
         elif amount > 0:
             win_streak += 1
-            loss_streak = 0
         else:
-            loss_streak = 0
             win_streak = 0
         max_loss_streak = max(max_loss_streak, loss_streak)
         max_win_streak = max(max_win_streak, win_streak)

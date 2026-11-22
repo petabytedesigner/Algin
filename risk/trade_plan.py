@@ -34,6 +34,22 @@ def number(value, name: str, *, positive: bool = False, zero_ok: bool = True) ->
     return result
 
 
+def advance_loss_streak(previous: int, net_pl_home) -> int:
+    """Only a verified net profit resets the consecutive-loss risk counter.
+
+    Break-even (exactly zero after costs) is neutral: it neither adds a
+    loss nor erases earlier losses. Shared by live-risk and offline replay.
+    """
+    if type(previous) is not int or previous < 0:
+        raise PlanRejected("Invalid prior loss streak")
+    net = number(net_pl_home, "verified trade net")
+    if net < 0:
+        return previous + 1
+    if net > 0:
+        return 0
+    return previous
+
+
 @dataclass(frozen=True)
 class RiskPolicy:
     """Explicitly separate single-trade risk from total exposure."""
