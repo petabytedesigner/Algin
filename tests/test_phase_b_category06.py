@@ -367,15 +367,17 @@ class TransportBoundaryTests(unittest.TestCase):
         self.assertIs(got, response)
         self.assertFalse(get.call_args.kwargs["allow_redirects"])
 
-    def test_timeout_is_sanitized_and_does_not_retry(self):
+    def test_timeout_is_sanitized_and_get_retries_are_bounded(self):
         session = self.Session(error=requests.Timeout("private-url-secret"))
         with (patch.object(config, "API_KEY", "fake-not-real"),
-              patch.object(config, "ACCOUNT_ID", "acct-1")):
+              patch.object(config, "ACCOUNT_ID", "acct-1"),
+              patch("broker.practice_transport.time.sleep") as sleep):
             transport = PracticeTransport(session=session)
             with self.assertRaises(BrokerCommunicationError) as ctx:
                 transport.read("/pricing", params={"instruments": "EUR_USD"})
         self.assertNotIn("private-url-secret", str(ctx.exception))
-        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(len(session.calls), 3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [0.25, 0.5])
 
 
 if __name__ == "__main__":
