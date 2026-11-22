@@ -14,6 +14,7 @@ import requests
 
 import config
 from broker.oanda_v20_contract import price_tradeable
+from utils.read_retry import GET_ATTEMPTS, get_backoff, get_status_retry_delay
 from utils.time_tools import iso_utc, utc_now
 
 
@@ -39,16 +40,27 @@ def safe_request(
     # Retain the historical signature, but only read-only requests can retry.
     if not isinstance(retries, int) or retries < 1:
         raise ValueError("GET retries must be a positive integer")
-    for attempt in range(retries):
+    attempt_limit = min(retries, GET_ATTEMPTS)
+    for attempt in range(attempt_limit):
         try:
-            return requests.get(
+            response = requests.get(
                 url, headers=headers, params=params, timeout=timeout,
                 allow_redirects=False,
             )
         except requests.RequestException:
-            LOG.warning("GET failed (attempt %s/%s)", attempt + 1, retries)
-            if attempt + 1 < retries:
-                time.sleep(1.0)
+            LOG.warning("GET failed (attempt %s/%s)", attempt + 1, attempt_limit)
+            if attempt + 1 < attempt_limit:
+                time.sleep(get_backoff(attempt))
+            continue
+        if attempt + 1 < attempt_limit:
+            delay = get_status_retry_delay(
+                response.status_code, getattr(response, "headers", {}), attempt
+            )
+            if delay is not None:
+                LOG.warning("GET response retryable (attempt %s/%s)", attempt + 1, attempt_limit)
+                time.sleep(delay)
+                continue
+        return response
     return None
 
 

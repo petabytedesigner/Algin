@@ -79,6 +79,11 @@ class AccountReconciler:
             raise ReconcileError("Incomplete OANDA account/transaction response")
         return reply.body
 
+    def _mark_transport_reconciled(self):
+        mark = getattr(self.transport, "mark_reconciled", None)
+        if callable(mark):
+            mark()
+
     def _account(self):
         body = self._read("")
         try:
@@ -602,6 +607,7 @@ class AccountReconciler:
                 and attempt.get("retired") is not True
                 and attempt.get("trade_id") in committed["closed_results"]):
                 self.journal.retire_confirmed(attempt["attempt_id"], self.store)
+        self._mark_transport_reconciled()
         return ReconcileReport(
             cursor, tuple(sorted(
                 tid for tid in broker_trades if tid in proposed["trades"]
