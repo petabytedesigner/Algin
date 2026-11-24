@@ -1,0 +1,111 @@
+name: OANDA M15 MBA historical research download
+
+# One-off, read-only research. Intentionally does not run on main or PRs.
+on:
+  push:
+    branches:
+      - research/oanda-history-m15-2026-11-24
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install existing dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify read-only historical ingestion regressions
+        run: python -m unittest discover -s tests -p 'test_phase_e_category29.py' -v
+      - name: Download and validate EUR_USD M15 MBA history
+        env:
+          OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          # Existing local practice configuration is a fallback if the two
+          # optional repository secrets are not configured. Never log values.
+          for line in Path('.env.example').read_text(encoding='utf-8').splitlines():
+              key, sep, value = line.partition('=')
+              if sep and key in {'OANDA_API_TOKEN', 'OANDA_ACCOUNT_ID'}:
+                  if not os.environ.get(key) and value.strip():
+                      os.environ[key] = value.strip().strip('"').strip("'")
+
+          from data.historical_oanda import (
+              HistoricalDataError, fetch_range, load_dataset, save_dataset,
+          )
+
+          out = Path('.local/historical')
+          out.mkdir(parents=True, exist_ok=True)
+          start, end = '2023-01-01T00:00:00Z', '2026-10-31T00:00:00Z'
+          report = {
+              'status': 'BLOCKED',
+              'source': 'OANDA_PRACTICE_V20_GET',
+              'instrument': 'EUR_USD', 'granularity': 'M15', 'price': 'MBA',
+              'from': start, 'to': end,
+          }
+          exit_code = 3
+          try:
+              smoke = fetch_range('EUR_USD',
+                                  '2026-10-26T12:00:00Z',
+                                  '2026-10-26T13:00:00Z')
+              if len(smoke['candles']) != 4:
+                  raise HistoricalDataError('M15 smoke check did not return 4 bars')
+              print('OANDA_READ_ONLY_SMOKE_OK; candles=4')
+
+              dataset = fetch_range('EUR_USD', start, end)
+              path = save_dataset(dataset, out)
+              verified = load_dataset(path)
+              report.update(
+                  status='VERIFIED',
+                  candles=len(verified['candles']),
+                  pages=verified['request_pages'],
+                  gaps=len(verified['gaps']),
+                  sha256=path.stem.rsplit('_', 1)[-1],
+                  file_name=path.name,
+              )
+              print('OANDA_HISTORY_VERIFIED; candles=' + str(report['candles']))
+              exit_code = 0
+          except HistoricalDataError as exc:
+              report['reason'] = str(exc)
+              print('OANDA_HISTORY_BLOCKED: ' + str(exc))
+          except Exception:
+              report['reason'] = 'Unexpected ingestion failure'
+              print('OANDA_HISTORY_BLOCKED: unexpected ingestion failure')
+          finally:
+              (out / 'download_status.json').write_text(
+                  json.dumps(report, sort_keys=True, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write('## OANDA historical research\n\n')
+                  summary.write('Status: **' + report['status'] + '**\n\n')
+                  summary.write('EUR_USD M15 MBA, 2023-01-01 through 2026-10-31 UTC.\n\n')
+                  if report['status'] == 'VERIFIED':
+                      summary.write('Verified bars: ' + str(report['candles']) + '\n\n')
+                      summary.write('SHA-256: `' + report['sha256'] + '`\n')
+                  else:
+                      summary.write('Reason: ' + report.get('reason', 'Unknown') + '\n')
+          sys.exit(exit_code)
+          PY
+      - name: Upload verified dataset or failure report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: eur-usd-m15-mba-history-${{ github.sha }}
+          path: .local/historical/
+          if-no-files-found: warn
+          retention-days: 90
