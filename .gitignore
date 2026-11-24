@@ -10,6 +10,7 @@ __pycache__/
 csv/events_*.csv
 csv/events.csv
 csv/*.lock
+csv/decision_trace.jsonl
 state.json
 state_v10.json
 heartbeat_v10.txt
