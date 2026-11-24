@@ -435,6 +435,7 @@ class TradePlanningTests(unittest.TestCase):
             patch("main.validate_candles", return_value=candles),
             patch("main.CandleGate") as checkpoint,
             patch("main.Strategy") as strategy,
+            patch("main.DecisionTrace"),
             patch("main.evaluate_signal_risk") as risk_eval,
             patch("main.LOG") as logger,
         ):

@@ -11,6 +11,7 @@ import time
 from functools import lru_cache
 from uuid import uuid4
 from storage.event_log import EventLog, AuditError, AuditProjector
+from storage.decision_trace import DecisionTrace, TraceError
 from storage.heartbeat import Heartbeat, HeartbeatError
 from datetime import datetime, timezone
 
@@ -22,13 +23,14 @@ from data.news_filter import NewsFilter
 from data.market_sessions import MarketSessions
 from broker.account_reconciler import AccountReconciler, ReconcileError
 from execution.trade_management import ManagementLoop
+from execution.trade_coordinator import stable_signal_id
 from storage.lifecycle_state import StateError
 from storage.intent_journal import JournalError
 from execution.trade_executor import BrokerDataError, TradeExecutor
 from risk.risk_engine import Grade, RiskConfig, RiskEngine, TradeCandidate
 from risk.trade_plan import InstrumentRules, RiskPolicy, TradePlanner
 from strategy.strategy import Strategy
-from utils.time_tools import utc_now
+from utils.time_tools import utc_now, parse_utc
 
 LOG = logging.getLogger("algin")
 
@@ -116,6 +118,7 @@ def build_news_filter():
 def _scan_once(cycle: str) -> int:
     """One read-only observation cycle; fail closed on broker uncertainty."""
     audit = EventLog(config.CSV_PATH) if config.CSV_ENABLED else None
+    decision_trace = DecisionTrace(config.CSV_PATH) if config.CSV_ENABLED else None
     heartbeat = Heartbeat(config.HEARTBEAT_PATH)
     def record(event, reason, *, instrument=None, outcome="BLOCKED", stage="BLOCK", direction=None):
         if audit is None: return
@@ -258,6 +261,61 @@ def _scan_once(cycle: str) -> int:
                 instrument, direction, candles, fast, slow,
                 atr, zone_low, zone_high, now
             )
+            # Persist only explicitly allowlisted decision evidence. A signal
+            # is OBSERVED, never a verified risk approval or broker fill.
+            if decision_trace is not None:
+                try:
+                    scoring = strategy.scoring.config
+                    signal_id = (
+                        stable_signal_id(
+                            config.ACCOUNT_ID, instrument, direction,
+                            parse_utc(candles[-1]["time"]),
+                            setup_id=getattr(signal, "setup_id", None),
+                        ) if signal is not None else None
+                    )
+                    decision_trace.append(
+                        cycle_id=cycle, instrument=instrument, direction=direction,
+                        timestamp=now, candle_time=candles[-1]["time"],
+                        decision="OBSERVED" if signal is not None else "REJECTED",
+                        reason_code="OBSERVE_ONLY" if signal is not None else (
+                            strategy.last_rejection_reason or "UNSPECIFIED"
+                        ),
+                        strategy_version=strategy.TRACE_VERSION,
+                        inputs={
+                            "ema_fast": fast, "ema_slow": slow,
+                            "atr": atr, "close": candles[-1]["close"],
+                            "bid": quote["bid"], "ask": quote["ask"],
+                        },
+                        metrics=(getattr(signal, "metrics", {}) if signal is not None else
+                                 (strategy.last_evaluation_metrics or {})),
+                        policy={
+                            "ema_fast_period": config.EMA_FAST,
+                            "ema_slow_period": config.EMA_SLOW,
+                            "atr_period": config.ATR_PERIOD,
+                            "max_retest_bars": config.MAX_RETEST_BARS,
+                            "grade_a_min": scoring.grade_a_min,
+                            "grade_b_min": scoring.grade_b_min,
+                            "grade_c_min": scoring.grade_c_min,
+                            "max_spread_pips": config.MAX_SPREAD_PIPS,
+                            "risk_grade_a_pct": config.RISK_GRADE_A_PCT,
+                            "risk_grade_b_pct": config.RISK_GRADE_B_PCT,
+                            "max_total_risk_pct": config.MAX_TOTAL_RISK_PCT,
+                            "max_daily_loss_pct": config.MAX_DAILY_LOSS_PCT,
+                            "max_drawdown_pct": config.MAX_DRAWDOWN_PCT,
+                            "min_distance_pips": config.MIN_DISTANCE_PIPS,
+                        },
+                        risk_status="NOT_EVALUATED_UNRECONCILED",
+                        score=(signal.score if signal is not None else
+                               strategy.last_evaluation_score),
+                        grade=(signal.grade if signal is not None else
+                               strategy.last_evaluation_grade),
+                        signal_id=signal_id,
+                        setup_id=(getattr(signal, "setup_id", None)
+                                  if signal is not None else None),
+                        attempt_id=None, trade_id=None, transaction_id=None,
+                    )
+                except (TraceError, ValueError, TypeError, KeyError) as exc:
+                    raise AuditError("Decision evidence unavailable") from exc
             if signal is not None:
                 signals.append(signal)
             else:
