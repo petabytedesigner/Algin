@@ -43,6 +43,8 @@ class StrategySignal:
 class Strategy:
     """Pure signal quality gate: breakout -> retest -> confirmation only."""
 
+    TRACE_VERSION = "bos-retest-v1"
+
     def __init__(self, scoring_config: Optional[ScoringConfig] = None):
         self.structure_engine = StructureEngine()
         # One policy source: config.MAX_RETEST_BARS, including for direct
@@ -59,6 +61,11 @@ class Strategy:
         # P59: reason for the last synchronous evaluation; not permission
         # to trade. Read immediately after evaluating each direction.
         self.last_rejection_reason = None
+        # Read-only evidence for the most recent direction. Never used to
+        # authorize a signal or modify its score/risk.
+        self.last_evaluation_metrics = None
+        self.last_evaluation_score = None
+        self.last_evaluation_grade = None
 
     def _reject(self, reason):
         self.last_rejection_reason = reason
@@ -71,6 +78,9 @@ class Strategy:
     ) -> Optional[StrategySignal]:
         """Return a signal only when all directional and data gates pass."""
         self.last_rejection_reason = None
+        self.last_evaluation_metrics = None
+        self.last_evaluation_score = None
+        self.last_evaluation_grade = None
         if direction not in ("LONG", "SHORT"):
             return self._reject("INVALID_DIRECTION")
         if not isinstance(instrument, str) or "_" not in instrument:
@@ -137,11 +147,14 @@ class Strategy:
             "in_reset_zone": False,
             # liquidity_sweep is NOT measured and has NO denominator weight.
         }
+        self.last_evaluation_metrics = dict(metrics)
         try:
             score = self.scoring.score(metrics)
             grade = self.scoring.grade_from_score(score)
         except ValueError:
             return self._reject("SCORING_INVALID")
+        self.last_evaluation_score = score
+        self.last_evaluation_grade = grade
         if grade == "D":
             return self._reject("SCORE_BELOW_THRESHOLD")
         if grade not in ("A", "B"):

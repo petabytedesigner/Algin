@@ -436,6 +436,7 @@ class NewsTests(unittest.TestCase):
                 patch("main.MarketSessions") as sessions,
                 patch("main.DataHandler") as data,
                 patch("main.Strategy") as strategy,
+                patch("main.DecisionTrace"),
                 patch("main.CandleGate", return_value=gate),
                 patch("main.build_news_filter") as news
             ):
