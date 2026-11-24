@@ -32,6 +32,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import hashlib
           import os
           from pathlib import Path
           import sys
@@ -45,8 +46,10 @@ jobs:
                       os.environ[key] = value.strip().strip('"').strip("'")
 
           from data.historical_oanda import (
-              HistoricalDataError, fetch_range, load_dataset, save_dataset,
+              HistoricalDataError, _candle, _gaps, _time,
+              fetch_range, load_dataset, save_dataset,
           )
+          from utils.common import safe_request
 
           out = Path('.local/historical')
           out.mkdir(parents=True, exist_ok=True)
@@ -58,6 +61,15 @@ jobs:
               'from': start, 'to': end,
           }
           exit_code = 3
+          observed_candles = []
+          def observed_get(method, url, *, headers, params):
+              response = safe_request(method, url, headers=headers, params=params)
+              if response is not None and response.status_code == 200:
+                  payload = response.json()
+                  if isinstance(payload, dict) and isinstance(payload.get('candles'), list):
+                      observed_candles.extend(payload['candles'])
+              return response
+
           try:
               smoke = fetch_range('EUR_USD',
                                   '2026-10-26T12:00:00Z',
@@ -66,7 +78,7 @@ jobs:
                   raise HistoricalDataError('M15 smoke check did not return 4 bars')
               print('OANDA_READ_ONLY_SMOKE_OK; candles=4')
 
-              dataset = fetch_range('EUR_USD', start, end)
+              dataset = fetch_range('EUR_USD', start, end, requester=observed_get)
               path = save_dataset(dataset, out)
               verified = load_dataset(path)
               report.update(
@@ -86,6 +98,32 @@ jobs:
               report['reason'] = 'Unexpected ingestion failure'
               print('OANDA_HISTORY_BLOCKED: unexpected ingestion failure')
           finally:
+              # Diagnostics are never certified as backtest input. Preserve
+              # all observed source bars without inserting synthetic candles.
+              if report['status'] != 'VERIFIED' and observed_candles:
+                  try:
+                      bars = [_candle(item) for item in observed_candles]
+                      gaps = _gaps(bars, _time(start), _time(end))
+                      open_gaps = [gap for gap in gaps if gap['classification'] != 'WEEKEND_CLOSED']
+                      report['observed_bars'] = len(bars)
+                      report['market_open_gap_count'] = len(open_gaps)
+                      report['market_open_gap_examples'] = open_gaps[:12]
+                      candidate = {
+                          'validation_status': 'UNVERIFIED_NOT_BACKTEST_APPROVED',
+                          'source': 'OANDA_PRACTICE_V20_GET',
+                          'instrument': 'EUR_USD', 'granularity': 'M15', 'price': 'MBA',
+                          'from': start, 'to': end,
+                          'candles': bars, 'gaps': gaps,
+                      }
+                      raw = (json.dumps(candidate, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
+                      sha = hashlib.sha256(raw).hexdigest()
+                      filename = 'UNVERIFIED_EUR_USD_M15_MBA_' + sha + '.json'
+                      with (out / filename).open('xb') as output:
+                          output.write(raw)
+                      report['unverified_file'] = filename
+                      report['unverified_sha256'] = sha
+                  except Exception:
+                      report['diagnostic_status'] = 'UNAVAILABLE'
               (out / 'download_status.json').write_text(
                   json.dumps(report, sort_keys=True, indent=2) + '\n',
                   encoding='utf-8',
@@ -99,6 +137,8 @@ jobs:
                       summary.write('SHA-256: `' + report['sha256'] + '`\n')
                   else:
                       summary.write('Reason: ' + report.get('reason', 'Unknown') + '\n')
+                      summary.write('\nObserved bars: ' + str(report.get('observed_bars', 0)) + '\n')
+                      summary.write('\nMarket-open gaps: ' + str(report.get('market_open_gap_count', 'unknown')) + '\n')
           sys.exit(exit_code)
           PY
       - name: Upload verified dataset or failure report
