@@ -1,0 +1,57 @@
+name: ShowMyTrades live news provider pilot (read-only)
+
+on:
+  push:
+    branches: ['development/showmytrades-live-news-2026-11-25']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install repository dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile live adapter and news integration
+        run: python -m compileall -q config.py data/news_filter.py data/economic_calendar_showmytrades.py tests/test_showmytrades_live_calendar.py
+      - name: Verify execution protections stay disabled
+        run: |
+          python -c 'import config; from broker.practice_transport import _PRACTICE_WRITES_RELEASED; assert config.ORDER_WRITES_ENABLED is False; assert _PRACTICE_WRITES_RELEASED is False'
+      - name: Offline live news fail-closed tests
+        run: python -m unittest discover -s tests -p 'test_showmytrades_live_calendar.py' -v
+      - name: Existing FMP and news-filter regressions
+        run: |
+          python -m unittest discover -s tests -p 'test_phase_d_category19.py' -v
+          python -m unittest discover -s tests -p 'test_phase_c_category10.py' -v
+      - name: One bounded, GET-only real ShowMyTrades source probe
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import timedelta
+          from data.economic_calendar_showmytrades import fetch_showmytrades_calendar
+          from data.news_filter import NewsFilter
+          from utils.time_tools import utc_now
+
+          now = utc_now()
+          payload = fetch_showmytrades_calendar(now=now)
+          events, fetched, coverage = NewsFilter._verify(payload, now, timedelta(minutes=30))
+          assert set(('EUR', 'USD')).issubset(coverage[2])
+          print(json.dumps({
+              'probe': 'PASS', 'source': 'ShowMyTrades', 'method': 'GET',
+              'fetched_at': payload['fetched_at'],
+              'coverage_start': payload['coverage_start'],
+              'coverage_end': payload['coverage_end'],
+              'currencies': len(payload['currencies']),
+              'high_events': len(events),
+              'broker_writes': False,
+          }, sort_keys=True))
+          PY
