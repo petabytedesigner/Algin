@@ -1,0 +1,75 @@
+name: Category 30 - hypothetical candidate price paths (research only)
+
+on:
+  push:
+    branches:
+      - research/category30-attested-parity-2026-11-25
+    paths:
+      - .github/workflows/category30-candidate-price-path.yml
+      - analytics/historical_candidate_price_paths.py
+      - tests/test_category30_candidate_price_paths.py
+      - docs/CATEGORY_30_PRICE_PATH_SCENARIOS.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category30-candidate-price-path-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  price_paths:
+    name: Read-only bid-ask scenario comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify scenario and evidence guard tests
+        run: |
+          python -m unittest discover -s tests -p test_category30_candidate_price_paths.py -v
+          python -m unittest discover -s tests -p test_category30_evidence_gate.py -v
+
+      - name: Download frozen Category 29 M15 bid-ask price coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: category29-research-price-coverage-45617330337
+          path: ${{ runner.temp }}/category30-prices
+          github-token: ${{ github.token }}
+          run-id: 45617330337
+          repository: ${{ github.repository }}
+
+      - name: Download complete Stage 1 historical signal reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: category30-m15-signals-*-45645175399
+          merge-multiple: true
+          path: ${{ runner.temp }}/category30-signals
+          github-token: ${{ github.token }}
+          run-id: 45645175399
+          repository: ${{ github.repository }}
+
+      - name: Trace candidate price paths without brokerage assumptions
+        run: |
+          python -u -m analytics.historical_candidate_price_paths \
+            --dataset "$RUNNER_TEMP/category30-prices/EUR_USD_M15_MBA_RESEARCH_ATTESTED_b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466.json" \
+            --manifest "$RUNNER_TEMP/category30-prices/EUR_USD_M15_MBA_RESEARCH_ATTESTED_b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466_MANIFEST.json" \
+            --signals-dir "$RUNNER_TEMP/category30-signals" \
+            --output "$RUNNER_TEMP/category30-price-paths/category30-candidate-price-paths.json"
+
+      - name: Preserve clearly labelled hypothetical outcomes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-hypothetical-price-paths-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-price-paths/category30-candidate-price-paths.json
+          if-no-files-found: warn
+          retention-days: 90
