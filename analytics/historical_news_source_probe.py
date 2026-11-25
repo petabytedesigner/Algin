@@ -146,9 +146,15 @@ def _http_get(window, token):
     return content
 
 
-def build_report(monthly_root, *, probe=False, token="", getter=None):
+def build_report(monthly_root, *, probe=False, token="", getter=None,
+                 probe_limit=None):
     """Fail closed on any unavailable query; never infer zero-news coverage."""
     source, candidates, windows = build_windows(monthly_root)
+    if probe_limit is None:
+        probe_limit = len(windows)
+    if (type(probe_limit) is not int
+        or not 1 <= probe_limit <= len(windows)):
+        raise NewsEvidenceError("Invalid bounded source-query limit")
     status = "NOT_PROBED"
     results = []
     if probe:
@@ -156,7 +162,7 @@ def build_report(monthly_root, *, probe=False, token="", getter=None):
             status = "BLOCKED_NO_FMP_API_KEY"
         else:
             fetch = _http_get if getter is None else getter
-            for window in windows:
+            for window in windows[:probe_limit]:
                 try:
                     result = validate_provider_json(fetch(window, token), window)
                 except NewsEvidenceError as exc:
@@ -166,10 +172,14 @@ def build_report(monthly_root, *, probe=False, token="", getter=None):
                     break
                 results.append({"decision_day_utc": window["decision_day_utc"],
                                 "status": "RETROSPECTIVE_SOURCE_SAMPLE_ONLY", **result})
-            status = ("RETROSPECTIVE_SOURCE_SAMPLES_ONLY"
-                      if len(results) == len(windows)
-                      and all(x["status"] == "RETROSPECTIVE_SOURCE_SAMPLE_ONLY" for x in results)
-                      else "BLOCKED_SOURCE_INCOMPLETE_OR_UNAVAILABLE")
+            if (len(results) == probe_limit
+                and all(x["status"] == "RETROSPECTIVE_SOURCE_SAMPLE_ONLY"
+                        for x in results)):
+                status = ("RETROSPECTIVE_SOURCE_SAMPLES_ONLY"
+                          if probe_limit == len(windows)
+                          else "PARTIAL_RETROSPECTIVE_SOURCE_SAMPLE")
+            else:
+                status = "BLOCKED_SOURCE_INCOMPLETE_OR_UNAVAILABLE"
     return {
         "schema": "CATEGORY30_STAGE4_HISTORIC_NEWS_SOURCE_PROBE_V1",
         "research_only": True,
@@ -180,6 +190,7 @@ def build_report(monthly_root, *, probe=False, token="", getter=None):
         "candidate_decisions": candidates,
         "windows": windows,
         "provider_probe_requested": bool(probe),
+        "provider_query_limit": probe_limit,
         "provider_status": status,
         "provider_responses": results,
         "historical_news_completeness_attested": False,
@@ -202,9 +213,11 @@ def main(argv=None):
     parser.add_argument("--signals-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--probe-fmp", action="store_true")
+    parser.add_argument("--probe-limit", type=int)
     args = parser.parse_args(argv)
     report = build_report(args.signals_dir, probe=args.probe_fmp,
-                          token=os.environ.get("FMP_API_KEY", ""))
+                          token=os.environ.get("FMP_API_KEY", ""),
+                          probe_limit=args.probe_limit)
     output = Path(args.output)
     if output.exists() or output.is_symlink():
         raise NewsEvidenceError("Output already exists; evidence must be immutable")
