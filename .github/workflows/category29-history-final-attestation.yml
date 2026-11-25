@@ -1,0 +1,68 @@
+name: Category 29 - Frozen OANDA research price attestation
+
+# Isolated, one-off research path. No live scan, broker call or write action.
+on:
+  push:
+    branches:
+      - research/category29-attestation-2026-11-25
+    paths:
+      - .github/workflows/category29-history-final-attestation.yml
+      - data/historical_research_attestation.py
+      - tests/test_category29_research_attestation.py
+      - docs/CATEGORY_29_RESEARCH_ATTESTATION.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category29-attestation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    name: Audit frozen 2023-2026 EUR_USD M15 MBA history
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated Category 29 research branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install existing project requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - name: Run isolated Category 29 original and attestation tests
+        run: |
+          python -m unittest discover -s tests -p 'test_phase_e_category29.py' -v
+          python -m unittest discover -s tests -p 'test_category29_research_attestation.py' -v
+
+      - name: Restore original immutable, unverified source from research run
+        uses: actions/download-artifact@v4
+        with:
+          name: eur-usd-m15-mba-history-620a951b45553b9cc77660a1396c5a1b597eee30
+          path: ${{ runner.temp }}/category29-original
+          github-token: ${{ github.token }}
+          run-id: 45505150800
+          repository: ${{ github.repository }}
+
+      - name: Verify all original candles, gaps, exclusion and holiday evidence
+        run: |
+          python -u -m data.historical_research_attestation \
+            --source "$RUNNER_TEMP/category29-original/UNVERIFIED_EUR_USD_M15_MBA_d16ad13ff69b4a4d56e9feb7a1e2cf26858da33b8a61a3abfa5a0f74707b6c6e.json" \
+            --sha256 d16ad13ff69b4a4d56e9feb7a1e2cf26858da33b8a61a3abfa5a0f74707b6c6e \
+            --out-dir "$RUNNER_TEMP/category29-attested"
+
+      - name: Save research-only dataset and complete evidence manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: category29-research-price-coverage-${{ github.run_id }}
+          path: ${{ runner.temp }}/category29-attested/*.json
+          if-no-files-found: error
+          retention-days: 90
