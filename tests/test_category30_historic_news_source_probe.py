@@ -114,6 +114,35 @@ class HistoricNewsSourceTests(unittest.TestCase):
         self.assertEqual(report["provider_responses"][0]["error_code"],
                          "SOURCE_HTTP_ERROR_403")
 
+    def test_one_window_probe_does_not_claim_full_window_coverage(self):
+        other = dict(self.window, decision_day_utc="2026-10-16",
+                     **{"from": "2026-10-15", "to": "2026-10-17"})
+        calls = []
+        def getter(window, token):
+            calls.append(window["decision_day_utc"])
+            return self._sample()
+        with patch.object(source, "build_windows", return_value=(
+            {"source_run_id": 45645175399, "monthly_archive_sha256": "digest"},
+            [{"setup_id": "A"}], [self.window, other],
+        )):
+            report = source.build_report("unused", probe=True, token="TOKEN",
+                                         getter=getter, probe_limit=1)
+        self.assertEqual(calls, ["2026-10-15"])
+        self.assertEqual(report["provider_status"],
+                         "PARTIAL_RETROSPECTIVE_SOURCE_SAMPLE")
+        self.assertFalse(report["net_pnl_backtest_permitted"])
+
+    def test_zero_or_over_limit_query_budget_is_rejected(self):
+        with patch.object(source, "build_windows", return_value=(
+            {"source_run_id": 45645175399, "monthly_archive_sha256": "digest"},
+            [{"setup_id": "A"}], [self.window],
+        )):
+            for invalid in (0, 2, -1, True):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(source.NewsEvidenceError):
+                        source.build_report("unused", probe=True, token="TOKEN",
+                                            probe_limit=invalid)
+
 
 if __name__ == "__main__":
     unittest.main()
