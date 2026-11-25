@@ -1,0 +1,72 @@
+name: Category 30 - attested EURUSD M15 signal parity (research only)
+
+on:
+  push:
+    branches:
+      - research/category30-attested-parity-2026-11-25
+    paths:
+      - .github/workflows/category30-m15-signal-audit.yml
+      - analytics/historical_signal_diagnostic.py
+      - tests/test_category30_signal_diagnostic.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category30-attested-signal-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Signal candidates ${{ matrix.year }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        year: [2023, 2024, 2025, 2026]
+
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install project requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - name: Verify focused offline tests
+        run: python -m unittest discover -s tests -p test_category30_signal_diagnostic.py -v
+
+      - name: Download Category 29 attested immutable OANDA price coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: category29-research-price-coverage-45617330337
+          path: ${{ runner.temp }}/category30-history
+          github-token: ${{ github.token }}
+          run-id: 45617330337
+          repository: ${{ github.repository }}
+
+      - name: Scan attested research window with production signals and rejection reasons
+        run: |
+          python -u -m analytics.historical_signal_diagnostic \
+            --dataset "$RUNNER_TEMP/category30-history/EUR_USD_M15_MBA_RESEARCH_ATTESTED_b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466.json" \
+            --sha256 b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466 \
+            --manifest "$RUNNER_TEMP/category30-history/EUR_USD_M15_MBA_RESEARCH_ATTESTED_b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466_MANIFEST.json" \
+            --year "${{ matrix.year }}" \
+            --output-dir "$RUNNER_TEMP/category30-monthly/${{ matrix.year }}"
+
+      - name: Preserve all completed monthly checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-m15-signals-${{ matrix.year }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-monthly/${{ matrix.year }}/*.json
+          if-no-files-found: warn
+          retention-days: 90
