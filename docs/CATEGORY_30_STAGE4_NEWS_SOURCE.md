@@ -13,9 +13,12 @@ backtest, historical broker attestation or proof of profitability.
    **the day before, the decision day and the day after** each decision. The
    provider's documented maximum single request is 90 days; each planned
    request here is only three days. At most 16 queries are planned.
-3. On normal GitHub `push`, generate the provider-query plan only; no paid
-   third-party call is made. On an **explicit manual workflow dispatch** with
-   `probe_fmp=true`, attempt one bounded GET for each date window using a
+3. The original GitHub `push` first generated the plan only. For a controlled
+   source-feasibility check, subsequent `push` runs now probe **at most the
+   earliest single decision window** using a preconfigured FMP key; without
+   it, the report marks a blocker and sends no request. On an **explicit
+   manual workflow dispatch** with `probe_fmp=true`, attempt one bounded GET
+   for each date window using a
    preconfigured `FMP_API_KEY` GitHub Actions secret. Never print an API key,
    response URL, authentication details or raw provider errors.
 4. Validate every returned event (UTC timestamp, currency, impact, title,
@@ -53,8 +56,10 @@ backtest, historical broker attestation or proof of profitability.
 
 ## Acceptance
 
-Seven focused offline Stage 4 tests, the Stage 2 evidence guard tests and the
+Nine focused offline Stage 4 tests, the Stage 2 evidence guard tests and the
 provider-query-plan generation must pass in GitHub Actions. The initial
-automated run should report `NOT_PROBED`; this is correct and never a claim
-that the calendar is clear. A manual FMP probe may be used only after
-separate credential and historical access verification.
+automated run reported `NOT_PROBED`; the limited follow-up push either returns
+`BLOCKED_NO_FMP_API_KEY`, a provider error or
+`PARTIAL_RETROSPECTIVE_SOURCE_SAMPLE`, with no inferred news clearance.
+A full-window manual FMP probe may be used only after separate credential
+and historical access verification.
