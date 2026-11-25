@@ -72,7 +72,7 @@ class ReadOnlyAuditTests(unittest.TestCase):
                   patch("analytics.historical_signal_diagnostic.EXPECTED_SOURCE_BARS", 218)):
                 result = load_attested_export(dataset, digest, manifest_path)
                 self.assertEqual(len(result["candles"]), 120)
-                with self.assertRaisesRegex(DiagnosticError, "checksum"):
+                with self.assertRaisesRegex(DiagnosticError, "Incorrect frozen"):
                     load_attested_export(dataset, "0" * 64, manifest_path)
                 with self.assertRaisesRegex(DiagnosticError, "unsafe"):
                     load_attested_export(dataset, digest, Path(tmp) / "absent.json")
