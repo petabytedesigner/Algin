@@ -5,7 +5,7 @@ on:
     branches:
       - research/category30-attested-parity-2026-11-25
     paths:
-      - .github/workflows/category30-m15-signal-audit.yml
+      - .github/workflows/category30-attested-signal-parity.yml
       - analytics/historical_signal_diagnostic.py
       - tests/test_category30_signal_diagnostic.py
   workflow_dispatch:
