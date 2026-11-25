@@ -9,9 +9,9 @@ Provider: https://showmytrades.com/docs/api/economic-calendar
 
 ## Selection and compatibility
 
-- Default remains `NEWS_CALENDAR_PROVIDER=FMP`, preserving the historical
-  FMP/explicit pinned URL behavior. The optional live feed is selected **only**
-  at runtime startup with `ALGIN_NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
+- The forward/live bot defaults to `NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
+  `ALGIN_NEWS_CALENDAR_PROVIDER=FMP` exists only as a deliberate compatibility
+  override; FMP's historical/backtest ingestion remains separate.
 - Static test news fixtures retain highest precedence. An opt-in ShowMyTrades
   setting together with a custom `NEWS_PROVIDER_URL` fails closed instead of
   choosing an ambiguous provider.
@@ -45,5 +45,6 @@ compatibility and the new adapter entirely offline, verifies broker writes
 remain disabled, then performs **one** public real-source GET with no broker
 calls or order execution. Failing the live probe must block promotion.
 
-No live provider is enabled by this branch or workflow; a separate reviewed
-configuration/release decision is required to enable it operationally.
+This branch selects ShowMyTrades as the default runtime news source. It does
+not enable broker order writes and does not fetch any historic news by itself.
+Promotion to `main` requires successful CI and review.

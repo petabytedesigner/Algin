@@ -32,26 +32,31 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_phase_d_category19.py' -v
           python -m unittest discover -s tests -p 'test_phase_c_category10.py' -v
+          python -m unittest discover -s tests -p 'test_category5.py' -v
       - name: One bounded, GET-only real ShowMyTrades source probe
         run: |
           python - <<'PY'
           import json
-          from datetime import timedelta
-          from data.economic_calendar_showmytrades import fetch_showmytrades_calendar
+          import config
           from data.news_filter import NewsFilter
-          from utils.time_tools import utc_now
+          from utils.time_tools import iso_utc, utc_now
 
+          assert config.NEWS_CALENDAR_PROVIDER == 'SHOWMYTRADES'
           now = utc_now()
-          payload = fetch_showmytrades_calendar(now=now)
-          events, fetched, coverage = NewsFilter._verify(payload, now, timedelta(minutes=30))
+          news = NewsFilter()
+          result = news.block_trading('EUR_USD', now)
+          assert result is None or result.startswith('HIGH-impact lockout'), result
+          coverage = news._coverage
+          assert coverage is not None
           assert set(('EUR', 'USD')).issubset(coverage[2])
           print(json.dumps({
               'probe': 'PASS', 'source': 'ShowMyTrades', 'method': 'GET',
-              'fetched_at': payload['fetched_at'],
-              'coverage_start': payload['coverage_start'],
-              'coverage_end': payload['coverage_end'],
-              'currencies': len(payload['currencies']),
-              'high_events': len(events),
+              'fetched_at': iso_utc(news._fetched_at),
+              'coverage_start': iso_utc(coverage[0]),
+              'coverage_end': iso_utc(coverage[1]),
+              'currencies': len(coverage[2]),
+              'high_events': len(news._events),
+              'decision': 'CLEAR' if result is None else 'HIGH_LOCKOUT',
               'broker_writes': False,
           }, sort_keys=True))
           PY
