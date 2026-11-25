@@ -1,0 +1,80 @@
+name: Category 30 - historical news source probe (research only)
+
+on:
+  push:
+    branches:
+      - research/category30-attested-parity-2026-11-25
+    paths:
+      - .github/workflows/category30-historic-news-source.yml
+      - analytics/historical_news_source_probe.py
+      - tests/test_category30_historic_news_source_probe.py
+      - docs/CATEGORY_30_STAGE4_NEWS_SOURCE.md
+  workflow_dispatch:
+    inputs:
+      probe_fmp:
+        description: "Explicitly probe historical FMP windows if FMP_API_KEY secret exists"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category30-historic-news-source-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source_probe:
+    name: Attested historic signal news query plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Stage 4 and Stage 2 evidence regression tests
+        run: |
+          python -m unittest discover -s tests -p test_category30_historic_news_source_probe.py -v
+          python -m unittest discover -s tests -p test_category30_evidence_gate.py -v
+
+      - name: Download frozen Stage 1 signal source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: category30-m15-signals-*-45645175399
+          merge-multiple: true
+          path: ${{ runner.temp }}/category30-signals
+          github-token: ${{ github.token }}
+          run-id: 45645175399
+          repository: ${{ github.repository }}
+
+      - name: Generate bounded source queries and optionally probe FMP
+        env:
+          STAGE4_PROBE_FMP: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_fmp == true }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: |
+          if [ "$STAGE4_PROBE_FMP" = "true" ]; then
+            python -u -m analytics.historical_news_source_probe \
+              --signals-dir "$RUNNER_TEMP/category30-signals" \
+              --output "$RUNNER_TEMP/category30-news-source/stage4-news-source-report.json" \
+              --probe-fmp
+          else
+            python -u -m analytics.historical_news_source_probe \
+              --signals-dir "$RUNNER_TEMP/category30-signals" \
+              --output "$RUNNER_TEMP/category30-news-source/stage4-news-source-report.json"
+          fi
+
+      - name: Preserve source evidence plan and blockers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-stage4-news-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-news-source/stage4-news-source-report.json
+          if-no-files-found: warn
+          retention-days: 90
