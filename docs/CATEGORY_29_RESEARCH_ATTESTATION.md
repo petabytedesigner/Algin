@@ -44,9 +44,12 @@ times with a five-minute offset relative to M15 bar boundaries. They support
 verification that all minutes were unavailable on this Practice account.
 Do not silently treat these bars as executable or synthesize holiday prices.
 
-## Research-only audit control
+## Completed research-only audit
 
-The dedicated `category29-history-final-attestation.yml` GitHub Action:
+The dedicated one-off workflow on the research branch completed successfully:
+https://github.com/petabytedesigner/Algin/actions/runs/45617330337
+(source workflow as executed at Git commit
+`21536d54982da47c35ac7749a670c2d2b7f383be`). It:
 
 1. Runs unit tests; downloads the original unverified artifact from the pinned
    GitHub run; hashes the raw bytes before parsing anything.
@@ -57,10 +60,24 @@ The dedicated `category29-history-final-attestation.yml` GitHub Action:
 4. Produces a versioned artifact with a source-linked manifest and price JSON,
    preserving the number of excluded bars, holiday citations and two hashes.
 
-The job runs *only* on the temporary research branch; it does not fetch fresh
-broker data, request or use tokens, place orders, merge to `main` or run a
-strategy P&L simulation. An `attested` status means the stated **price-time
-coverage** passed this procedure only.
+The job ran *only* on the temporary research branch. Its executable workflow
+is deliberately **not merged into `main`**: the repository's Category 20 CI
+policy restricts active workflow action references, and broadening that policy
+is outside Category 29. Its exact implementation remains reviewable in the
+linked commit and successful run. The job did not fetch fresh broker data,
+request or use account tokens, place orders or run a strategy P&L simulation.
+
+**Verified result:** 14/14 focused tests passed; 95,320 retained source bars;
+98 excluded early bars; all 6 expected holidays matched exactly; 0 remaining
+unexplained market-open M15 intervals in the bounded research window. The
+artifact [category29-research-price-coverage-45617330337](https://github.com/petabytedesigner/Algin/actions/runs/45617330337/artifacts/15022537585)
+contains the evidence manifest and immutable research payload with SHA-256
+`b48e0f98a2fe948d83afd1d384ae8b23e28b04c1275425c06b543cf75dce5466`.
+The GitHub artifact is retained for 90 days from 2026-11-25; save a separate
+copy if needed beyond that expiration.
+
+An `attested` status means the stated **price-time coverage** passed this
+procedure only.
 
 **Still for Category 30:** historical economic events, tradability and exact
 broker fills, currency conversion, financing, execution slippage and related
