@@ -39,14 +39,14 @@ def load_attested_export(path, expected_sha256, manifest_path):
 
     Research coverage is attested. Broker fills/news/tradeability are NOT.
     """
+    if expected_sha256 != EXPECTED_PRICE_SHA256:
+        raise DiagnosticError("Incorrect frozen Category 29 payload SHA-256")
     path, manifest_path = Path(path), Path(manifest_path)
     if (path.is_symlink() or not path.is_file()
         or path.stat().st_size > 50_000_000
         or manifest_path.is_symlink() or not manifest_path.is_file()
         or manifest_path.stat().st_size > 1_000_000):
         raise DiagnosticError("Missing/unsafe attested price or manifest")
-    if expected_sha256 != EXPECTED_PRICE_SHA256:
-        raise DiagnosticError("Incorrect frozen Category 29 payload SHA-256")
     raw = path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise DiagnosticError("Attested payload checksum mismatch")
