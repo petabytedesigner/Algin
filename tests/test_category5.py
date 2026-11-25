@@ -368,7 +368,9 @@ class NewsTests(unittest.TestCase):
 
     def test_P56_missing_provider_is_unknown_not_clear(self):
         news = NewsFilter()
-        with patch.object(config, "NEWS_PROVIDER_URL", None, create=True):
+        with patch.object(config, "NEWS_PROVIDER_URL", None, create=True), patch.object(
+            config, "NEWS_CALENDAR_PROVIDER", "FMP"
+        ):
             self.assertIn("NEWS_UNKNOWN",
                           news.block_trading("EUR_USD", self.now))
 

@@ -38,6 +38,11 @@ NEWS_LOCKOUT_MINUTES_BEFORE = 30
 NEWS_LOCKOUT_MINUTES_AFTER = 30
 NEWS_CACHE_TTL_MINUTES = 15
 NEWS_CACHE_MAX_AGE_MINUTES = 30
+# The forward/live bot uses ShowMyTrades by default for HIGH-impact news.
+# FMP is retained only as an explicitly selected legacy provider; historical
+# data ingestion/replay uses separate adapters and frozen event input.
+# A missing/unverifiable live calendar always blocks new entries.
+NEWS_CALENDAR_PROVIDER = os.getenv("ALGIN_NEWS_CALENDAR_PROVIDER", "SHOWMYTRADES")
 SIGNAL_CANDLE_MAX_AGE_MINUTES = 45
 MAX_RETEST_BARS = 4
 ENABLE_SESSIONS = True

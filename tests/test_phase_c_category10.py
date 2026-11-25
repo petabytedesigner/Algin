@@ -298,6 +298,7 @@ class NewsCoverageTests(unittest.TestCase):
 
     def test_unapproved_https_host_cannot_trigger_external_fetch(self):
         with (
+            patch.object(config, "NEWS_CALENDAR_PROVIDER", "FMP"),
             patch.object(config, "STATIC_NEWS_LIST", None, create=True),
             patch.object(config, "NEWS_PROVIDER_URL",
                          "https://not-approved.example/news", create=True),
@@ -311,6 +312,7 @@ class NewsCoverageTests(unittest.TestCase):
 
     def test_unconfigured_provider_is_always_unknown(self):
         with (
+            patch.object(config, "NEWS_CALENDAR_PROVIDER", "FMP"),
             patch.object(config, "STATIC_NEWS_LIST", None, create=True),
             patch.object(config, "NEWS_PROVIDER_URL", None, create=True),
         ):

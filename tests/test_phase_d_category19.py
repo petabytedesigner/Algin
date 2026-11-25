@@ -154,10 +154,13 @@ class FmpNewsFilterIntegrationTests(unittest.TestCase):
     def setUp(self):
         # The FMP adapter is selected only when there is no legacy explicit
         # pinned provider URL or static test fixture.
+        self.fmp_mode = patch.object(config, "NEWS_CALENDAR_PROVIDER", "FMP")
         self.static = patch.object(config, "STATIC_NEWS_LIST", None, create=True)
         self.legacy = patch.object(config, "NEWS_PROVIDER_URL", None, create=True)
+        self.fmp_mode.start()
         self.static.start()
         self.legacy.start()
+        self.addCleanup(self.fmp_mode.stop)
         self.addCleanup(self.static.stop)
         self.addCleanup(self.legacy.stop)
         self.current_clock = NOW

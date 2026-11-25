@@ -119,7 +119,24 @@ class NewsFilter:
                     config, "STATIC_NEWS_CURRENCIES", None
                 ),
             }
+        provider = getattr(config, "NEWS_CALENDAR_PROVIDER", "FMP")
+        if provider not in ("FMP", "SHOWMYTRADES"):
+            raise NewsUnavailable("Unknown economic-calendar provider selection")
         url = getattr(config, "NEWS_PROVIDER_URL", None)
+        if provider == "SHOWMYTRADES":
+            if url:
+                raise NewsUnavailable("Conflicting economic-calendar providers")
+            from data.economic_calendar_showmytrades import (
+                ShowMyTradesCalendarError, fetch_showmytrades_calendar,
+            )
+            try:
+                return fetch_showmytrades_calendar(
+                    now=_FETCH_REFERENCE_TIME.get() or utc_now(),
+                )
+            except ShowMyTradesCalendarError:
+                raise NewsUnavailable(
+                    "ShowMyTrades economic calendar unavailable or unverified"
+                ) from None
         if not isinstance(url, str) or not url:
             # Separate economic-calendar subscription: OANDA credentials
             # cannot authenticate a third-party provider. Absence means
@@ -170,6 +187,7 @@ class NewsFilter:
         except (TypeError, ValueError) as exc:
             raise NewsUnavailable("Malformed static calendar source") from exc
         source = (
+            getattr(config, "NEWS_CALENDAR_PROVIDER", "FMP"),
             getattr(config, "NEWS_PROVIDER_URL", None),
             getattr(config, "NEWS_PROVIDER_HOST", None),
             hashlib.sha256(os.environ.get(
