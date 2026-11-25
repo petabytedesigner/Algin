@@ -57,9 +57,16 @@ jobs:
       - name: Generate bounded source queries and optionally probe FMP
         env:
           STAGE4_PROBE_FMP: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_fmp == true }}
+          STAGE4_EVENT: ${{ github.event_name }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: |
-          if [ "$STAGE4_PROBE_FMP" = "true" ]; then
+          if [ "$STAGE4_EVENT" = "push" ]; then
+            # On push, one earliest historic window only; no bulk FMP calls.
+            python -u -m analytics.historical_news_source_probe \
+              --signals-dir "$RUNNER_TEMP/category30-signals" \
+              --output "$RUNNER_TEMP/category30-news-source/stage4-news-source-report.json" \
+              --probe-fmp --probe-limit 1
+          elif [ "$STAGE4_PROBE_FMP" = "true" ]; then
             python -u -m analytics.historical_news_source_probe \
               --signals-dir "$RUNNER_TEMP/category30-signals" \
               --output "$RUNNER_TEMP/category30-news-source/stage4-news-source-report.json" \
