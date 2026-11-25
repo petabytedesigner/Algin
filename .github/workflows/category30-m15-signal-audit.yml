@@ -1,0 +1,71 @@
+name: Category 30 - EURUSD M15 signal candidates (research only)
+
+on:
+  push:
+    branches:
+      - research/category30-m15-signal-audit-2026-11-25
+    paths:
+      - .github/workflows/category30-m15-signal-audit.yml
+      - analytics/historical_signal_diagnostic.py
+      - tests/test_category30_signal_diagnostic.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category30-m15-signal-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Signal candidates ${{ matrix.year }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        year: [2023, 2024, 2025, 2026]
+
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install project requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - name: Verify focused offline tests
+        run: python -m unittest discover -s tests -p test_category30_signal_diagnostic.py -v
+
+      - name: Download original immutable OANDA research artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: eur-usd-m15-mba-history-620a951b45553b9cc77660a1396c5a1b597eee30
+          path: ${{ runner.temp }}/category30-history
+          github-token: ${{ github.token }}
+          run-id: 45505150800
+          repository: ${{ github.repository }}
+
+      - name: Scan current year using production signal and session rules
+        run: |
+          python -u -m analytics.historical_signal_diagnostic \
+            --dataset "$RUNNER_TEMP/category30-history/UNVERIFIED_EUR_USD_M15_MBA_d16ad13ff69b4a4d56e9feb7a1e2cf26858da33b8a61a3abfa5a0f74707b6c6e.json" \
+            --sha256 d16ad13ff69b4a4d56e9feb7a1e2cf26858da33b8a61a3abfa5a0f74707b6c6e \
+            --year "${{ matrix.year }}" \
+            --output-dir "$RUNNER_TEMP/category30-monthly/${{ matrix.year }}"
+
+      - name: Preserve all completed monthly checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-m15-signals-${{ matrix.year }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-monthly/${{ matrix.year }}/*.json
+          if-no-files-found: warn
+          retention-days: 30
