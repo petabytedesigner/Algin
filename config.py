@@ -38,6 +38,10 @@ NEWS_LOCKOUT_MINUTES_BEFORE = 30
 NEWS_LOCKOUT_MINUTES_AFTER = 30
 NEWS_CACHE_TTL_MINUTES = 15
 NEWS_CACHE_MAX_AGE_MINUTES = 30
+# Opt-in live provider only. Default FMP behavior remains unchanged; set
+# ALGIN_NEWS_CALENDAR_PROVIDER=SHOWMYTRADES to use the free live UTC feed.
+# This selection is not used by historical backtests or offline news fixtures.
+NEWS_CALENDAR_PROVIDER = os.getenv("ALGIN_NEWS_CALENDAR_PROVIDER", "FMP")
 SIGNAL_CANDLE_MAX_AGE_MINUTES = 45
 MAX_RETEST_BARS = 4
 ENABLE_SESSIONS = True
