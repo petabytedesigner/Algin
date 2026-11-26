@@ -58,7 +58,7 @@ jobs:
         env:
           STAGE4_PROBE_FMP: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_fmp == true }}
           STAGE4_EVENT: ${{ github.event_name }}
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FMP_API_KEY: 'oaJe45g2H0va37EKvjLjaX8yNX4GQ7vv'
         run: |
           if [ "$STAGE4_EVENT" = "push" ]; then
             # On push, one earliest historic window only; no bulk FMP calls.
