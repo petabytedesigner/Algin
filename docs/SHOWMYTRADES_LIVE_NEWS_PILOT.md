@@ -49,7 +49,11 @@ to another provider is permitted after a selected source fails.
 `.github/workflows/showmytrades-live-news-pilot.yml` tests historical FMP
 compatibility and the new adapter entirely offline, verifies broker writes
 remain disabled, then performs **one** public real-source GET with no broker
-calls or order execution. Failing the live probe must block promotion.
+calls or order execution **only when the live gate is enabled**. While the
+runtime switch is off, the external probe is explicitly SKIPPED and offline
+contract tests still run; this is not evidence of current provider health.
+Once the live gate is re-enabled, a failing real-source probe must block
+promotion.
 
 This branch selects ShowMyTrades as the default runtime news source. It does
 not enable broker order writes and does not fetch any historic news by itself.
