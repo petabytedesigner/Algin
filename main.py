@@ -115,6 +115,13 @@ def build_news_filter():
     )
 
 
+def _live_news_status(instrument: str, now: datetime):
+    """Temporary live gate switch; the provider/validation contracts stay intact."""
+    if not config.ENABLE_NEWS_FILTER:
+        return None
+    return build_news_filter().block_trading(instrument, now)
+
+
 def _scan_once(cycle: str) -> int:
     """One read-only observation cycle; fail closed on broker uncertainty."""
     audit = EventLog(config.CSV_PATH) if config.CSV_ENABLED else None
@@ -204,7 +211,6 @@ def _scan_once(cycle: str) -> int:
         return 3
     strategy = Strategy()
     gate = CandleGate(config.ACCOUNT_ID)
-    calendar = build_news_filter()
     for instrument in INSTRUMENTS:
         rules = catalog.get(instrument)
         if not isinstance(rules, InstrumentRules) or rules.kind != "CURRENCY":
@@ -332,7 +338,9 @@ def _scan_once(cycle: str) -> int:
                  instrument, signal.direction, signal.grade, signal.score)
         record("SIGNAL_OBSERVED","OBSERVE_ONLY",instrument=instrument,
                direction=signal.direction,outcome="INFO",stage="SIGNAL")
-        news_status = calendar.block_trading(instrument, now)
+        if not config.ENABLE_NEWS_FILTER:
+            LOG.info("%s: live news gate temporarily disabled (observation only)", instrument)
+        news_status = _live_news_status(instrument, now)
         if news_status is not None:
             LOG.warning("%s: entry blocked by news gate: %s", instrument, news_status)
             record("ENTRY_DENIED","NEWS_UNKNOWN" if news_status.startswith("NEWS_UNKNOWN")

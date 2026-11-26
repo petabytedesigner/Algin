@@ -38,10 +38,13 @@ NEWS_LOCKOUT_MINUTES_BEFORE = 30
 NEWS_LOCKOUT_MINUTES_AFTER = 30
 NEWS_CACHE_TTL_MINUTES = 15
 NEWS_CACHE_MAX_AGE_MINUTES = 30
+# Temporarily disable the live entry news gate during observation/testing.
+# Re-enable only after explicit review; this does not affect historical replay.
+ENABLE_NEWS_FILTER = False
 # The forward/live bot uses ShowMyTrades by default for HIGH-impact news.
 # FMP is retained only as an explicitly selected legacy provider; historical
 # data ingestion/replay uses separate adapters and frozen event input.
-# A missing/unverifiable live calendar always blocks new entries.
+# When enabled, a missing/unverifiable live calendar blocks new entries.
 NEWS_CALENDAR_PROVIDER = os.getenv("ALGIN_NEWS_CALENDAR_PROVIDER", "SHOWMYTRADES")
 SIGNAL_CANDLE_MAX_AGE_MINUTES = 45
 MAX_RETEST_BARS = 4

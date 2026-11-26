@@ -9,7 +9,13 @@ Provider: https://showmytrades.com/docs/api/economic-calendar
 
 ## Selection and compatibility
 
-- The forward/live bot defaults to `NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
+- **Temporary runtime setting:** `config.ENABLE_NEWS_FILTER = False` means
+  the live signal scan does not request or enforce economic news at entry time.
+  The adapter and strict `NewsFilter` checks are preserved for later activation.
+  This switch does not change historical FMP/replay filters and does not allow
+  any broker orders (`ORDER_WRITES_ENABLED = False`). Before any future
+  order-enabled release, re-enable and verify the live news gate explicitly.
+- When the gate is enabled, the forward/live bot defaults to `NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
   `ALGIN_NEWS_CALENDAR_PROVIDER=FMP` exists only as a deliberate compatibility
   override; FMP's historical/backtest ingestion remains separate.
 - Static test news fixtures retain highest precedence. An opt-in ShowMyTrades
