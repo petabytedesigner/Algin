@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       probe_fmp:
-        description: "Explicitly probe historical FMP windows if FMP_API_KEY secret exists"
+        description: "Explicitly probe historical FMP windows if FMP repository secret exists"
         required: true
         type: boolean
         default: false
@@ -58,7 +58,7 @@ jobs:
         env:
           STAGE4_PROBE_FMP: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_fmp == true }}
           STAGE4_EVENT: ${{ github.event_name }}
-          FMP_API_KEY: 'oaJe45g2H0va37EKvjLjaX8yNX4GQ7vv'
+          FMP_API_KEY: ${{ secrets.FMP }}
         run: |
           if [ "$STAGE4_EVENT" = "push" ]; then
             # On push, one earliest historic window only; no bulk FMP calls.
