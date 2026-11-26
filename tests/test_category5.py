@@ -433,6 +433,7 @@ class NewsTests(unittest.TestCase):
             with (
                 patch.object(config, "API_KEY", "dummy"),
                 patch.object(config, "ACCOUNT_ID", "test-account"),
+                patch.object(config, "ENABLE_NEWS_FILTER", True),
                 patch("main.utc_now", return_value=NOW),
                 patch.object(TradeExecutor, "get_open_trades", return_value=[]),
                 patch("main.MarketSessions") as sessions,
