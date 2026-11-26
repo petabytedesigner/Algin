@@ -25,6 +25,30 @@ _ALLOWED_ACTIONS = frozenset((
     "actions/checkout@" + CHECKOUT_ACTION,
     "actions/setup-python@" + SETUP_PYTHON_ACTION,
 ))
+_APPROVED_PRACTICE_SECRET_STEP = """      - name: Verify authenticated Practice account by GET only
+        env:
+          OANDA_API_TOKEN: ${{ secrets.OANDA }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
+        run: python -m operations.practice_ci_probe --run-actions"""
+
+
+def _approved_workflow_secrets(path, content):
+    """Permit precisely two secrets in the manual, main-only Practice job."""
+    if path.name != "category12.yml":
+        return "secrets." not in content
+    if content.count(_APPROVED_PRACTICE_SECRET_STEP) != 1:
+        return False
+    if "secrets." in content.replace(_APPROVED_PRACTICE_SECRET_STEP, "", 1):
+        return False
+    manual = re.search(
+        r"(?ms)^  authenticated-practice-read:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        content,
+    )
+    return bool(
+        manual and _APPROVED_PRACTICE_SECRET_STEP in manual.group()
+        and "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+        in manual.group()
+    )
 
 
 def _version(value):
@@ -81,7 +105,7 @@ def audit_workflows(root=REPO_ROOT):
             return {"status": "BLOCKED", "reason": "CI_WORKFLOW_UNREADABLE"}
         if (not re.search(r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$", text)
             or re.search(r"(?m)^\s*pull_request_target\s*:", text)
-            or "write-all" in text or "secrets." in text):
+            or "write-all" in text or not _approved_workflow_secrets(path, text)):
             return {"status": "BLOCKED", "reason": "CI_WORKFLOW_PERMISSION_POLICY"}
         actions = re.findall(r"(?m)^\s*-\s*uses:\s*(\S+)", text)
         if (not actions or any(action not in _ALLOWED_ACTIONS for action in actions)
@@ -91,7 +115,7 @@ def audit_workflows(root=REPO_ROOT):
     practice = (directory / "category12.yml").read_text(encoding="utf-8")
     if ("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
         not in practice or
-        "python -m operations.practice_ci_probe --run" not in practice):
+        "python -m operations.practice_ci_probe --run-actions" not in practice):
         return {"status": "BLOCKED", "reason": "CI_AUTH_PROBE_NOT_MANUAL_MAIN_ONLY"}
     return {
         "status": "PASS",
