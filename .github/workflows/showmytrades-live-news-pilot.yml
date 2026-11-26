@@ -42,6 +42,12 @@ jobs:
           from utils.time_tools import iso_utc, utc_now
 
           assert config.NEWS_CALENDAR_PROVIDER == 'SHOWMYTRADES'
+          if not config.ENABLE_NEWS_FILTER:
+              print(json.dumps({
+                  'probe': 'SKIPPED', 'reason': 'LIVE_NEWS_FILTER_DISABLED',
+                  'broker_writes': False,
+              }, sort_keys=True))
+              raise SystemExit(0)
           now = utc_now()
           news = NewsFilter()
           result = news.block_trading('EUR_USD', now)

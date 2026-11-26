@@ -9,7 +9,13 @@ Provider: https://showmytrades.com/docs/api/economic-calendar
 
 ## Selection and compatibility
 
-- The forward/live bot defaults to `NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
+- **Temporary runtime setting:** `config.ENABLE_NEWS_FILTER = False` means
+  the live signal scan does not request or enforce economic news at entry time.
+  The adapter and strict `NewsFilter` checks are preserved for later activation.
+  This switch does not change historical FMP/replay filters and does not allow
+  any broker orders (`ORDER_WRITES_ENABLED = False`). Before any future
+  order-enabled release, re-enable and verify the live news gate explicitly.
+- When the gate is enabled, the forward/live bot defaults to `NEWS_CALENDAR_PROVIDER=SHOWMYTRADES`.
   `ALGIN_NEWS_CALENDAR_PROVIDER=FMP` exists only as a deliberate compatibility
   override; FMP's historical/backtest ingestion remains separate.
 - Static test news fixtures retain highest precedence. An opt-in ShowMyTrades
@@ -43,7 +49,11 @@ to another provider is permitted after a selected source fails.
 `.github/workflows/showmytrades-live-news-pilot.yml` tests historical FMP
 compatibility and the new adapter entirely offline, verifies broker writes
 remain disabled, then performs **one** public real-source GET with no broker
-calls or order execution. Failing the live probe must block promotion.
+calls or order execution **only when the live gate is enabled**. While the
+runtime switch is off, the external probe is explicitly SKIPPED and offline
+contract tests still run; this is not evidence of current provider health.
+Once the live gate is re-enabled, a failing real-source probe must block
+promotion.
 
 This branch selects ShowMyTrades as the default runtime news source. It does
 not enable broker order writes and does not fetch any historic news by itself.
