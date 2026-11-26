@@ -1,13 +1,14 @@
-"""Explicit GET-only OANDA Practice evidence from the existing demo .env.example.
+"""Explicit GET-only OANDA Practice evidence from approved credentials.
 
 Never shell-source, print, copy to GitHub outputs, or modify the user's
-credentials. Only the explicit --run mode contacts the broker. Import and
---check are fully offline and cannot turn a skipped probe into a PASS.
+credentials. Explicit --run-actions uses GitHub environment secrets; local
+--run retains the existing demo-file contract. Import and --check are offline.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -25,7 +26,9 @@ def main(argv=None, *, root=REPO_ROOT):
     modes.add_argument("--check", action="store_true",
                        help="Validate read-only policy without credentials or network")
     modes.add_argument("--run", action="store_true",
-                       help="Use existing demo file for authenticated GET-only probe")
+                       help="Use existing local demo file for GET-only probe")
+    modes.add_argument("--run-actions", action="store_true",
+                       help="Use manual GitHub Actions secrets for GET-only probe")
     args = parser.parse_args(argv)
 
     if args.check:
@@ -43,9 +46,21 @@ def main(argv=None, *, root=REPO_ROOT):
         return 0
 
     try:
-        # The existing safe parser accepts precisely the two intended demo
-        # fields. Do not load shell syntax or mix in a partial CI environment.
-        existing = account_environment(Path(root), environ={})
+        # Explicit manual Actions mode requires BOTH repository secrets.
+        # Never fall back to a checked-in example file when either is missing.
+        # The original --run contract remains unchanged for local operators.
+        if args.run_actions:
+            if os.environ.get("GITHUB_ACTIONS") != "true":
+                raise ValueError("GitHub Actions mode requires GitHub runner")
+            action_env = {
+                "OANDA_API_TOKEN": os.environ.get("OANDA_API_TOKEN", ""),
+                "OANDA_ACCOUNT_ID": os.environ.get("OANDA_ACCOUNT_ID", ""),
+            }
+            if not all(action_env.values()):
+                raise ValueError("GitHub Actions credentials unavailable")
+            existing = account_environment(Path(root), environ=action_env)
+        else:
+            existing = account_environment(Path(root), environ={})
         # config.py loads process env at import; set these values only in
         # this dedicated short-lived Python process, before constructing
         # the GET-only PracticeTransport.

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import io
 import json
+import os
 import shutil
 import unittest
 
@@ -111,6 +112,26 @@ class DependencyAndWorkflowAuditTests(unittest.TestCase):
                 runtime_audit.audit_workflows(tmp)["status"], "BLOCKED"
             )
 
+    def test_manual_practice_secrets_are_exact_and_cannot_escape_the_gate(self):
+        with TemporaryDirectory() as tmp:
+            folder = self.copy_workflows(tmp)
+            source = folder / "category12.yml"
+            original = source.read_text()
+            for old, new in (
+                ("secrets.OANDA_ACCOUNT_ID", "secrets.UNREVIEWED"),
+                ("secrets.OANDA", "vars.OANDA"),
+                ("--run-actions", "--run"),
+                ("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+                 "if: github.event_name == 'push'"),
+            ):
+                with self.subTest(change=old):
+                    source.write_text(original.replace(old, new))
+                    self.assertEqual(runtime_audit.audit_workflows(tmp)["status"], "BLOCKED")
+            source.write_text(original)
+            unapproved = folder / "category1.yml"
+            unapproved.write_text(unapproved.read_text() + "\n# ${{ secrets.OANDA }}\n")
+            self.assertEqual(runtime_audit.audit_workflows(tmp)["status"], "BLOCKED")
+
     def test_unsupported_python_version_is_not_incorrectly_certified(self):
         report = runtime_audit.run_audit(
             python_version=(3, 15), versions=DEPS, requirements=BOUNDS
@@ -200,6 +221,40 @@ class ExistingDemoPracticeProbeTests(unittest.TestCase):
             "OANDA_API_TOKEN=" + FAKE_TOKEN + "\n"
             + "OANDA_ACCOUNT_ID=" + EXPECTED_ACCOUNT + "\n"
         ))
+
+    def test_manual_actions_mode_uses_secrets_without_example_file(self):
+        self.path.unlink()
+        with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true",
+            "OANDA_API_TOKEN": FAKE_TOKEN,
+            "OANDA_ACCOUNT_ID": EXPECTED_ACCOUNT,
+        }):
+            status, result, key, calls = self.execute(["--run-actions"])
+        self.assertEqual(status, 0)
+        self.assertEqual(result["status"], "AUTHENTICATED_PRACTICE_VERIFIED")
+        self.assertEqual(key, FAKE_TOKEN)
+        self.assertEqual(calls, 1)
+        self.assertNotIn(FAKE_TOKEN, json.dumps(result))
+        self.assertNotIn(EXPECTED_ACCOUNT, json.dumps(result))
+
+    def test_actions_mode_requires_both_secrets_and_never_falls_back(self):
+        # A populated legacy sample must not repair missing Actions secrets.
+        for token, account, runner in (
+            ("", EXPECTED_ACCOUNT, "true"),
+            (FAKE_TOKEN, "", "true"),
+            (FAKE_TOKEN, "wrong-account", "true"),
+            (FAKE_TOKEN, EXPECTED_ACCOUNT, "false"),
+        ):
+            with self.subTest(token=bool(token), account=account, runner=runner):
+                with patch.dict(os.environ, {
+                    "GITHUB_ACTIONS": runner,
+                    "OANDA_API_TOKEN": token,
+                    "OANDA_ACCOUNT_ID": account,
+                }):
+                    status, result, _, calls = self.execute(["--run-actions"])
+                self.assertEqual(status, 3)
+                self.assertEqual(result["status"], "AUTHENTICATED_PRACTICE_UNVERIFIED")
+                self.assertEqual(calls, 0)
 
     def test_injected_broker_probe_can_never_prove_network(self):
         status, result, _, calls = self.execute(
