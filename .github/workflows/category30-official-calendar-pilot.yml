@@ -1,0 +1,114 @@
+name: Category 30 - free official BLS historic calendar pilot
+
+on:
+  push:
+    branches:
+      - research/category30-official-calendar-pilot-2026-11-27
+    paths:
+      - .github/workflows/category30-official-calendar-pilot.yml
+      - analytics/historical_official_bls_probe.py
+      - analytics/historical_official_fomc_probe.py
+      - analytics/historical_official_bea_probe.py
+      - tests/test_category30_official_bls_probe.py
+      - tests/test_category30_official_fomc_probe.py
+      - tests/test_category30_official_bea_probe.py
+      - docs/CATEGORY_30_OFFICIAL_CALENDAR_PILOT.md
+  pull_request:
+    branches:
+      - research/category30-attested-parity-2026-11-25
+    paths:
+      - .github/workflows/category30-official-calendar-pilot.yml
+      - analytics/historical_official_bls_probe.py
+      - analytics/historical_official_fomc_probe.py
+      - analytics/historical_official_bea_probe.py
+      - tests/test_category30_official_bls_probe.py
+      - tests/test_category30_official_fomc_probe.py
+      - tests/test_category30_official_bea_probe.py
+      - docs/CATEGORY_30_OFFICIAL_CALENDAR_PILOT.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: category30-official-bls-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  official_usd_calendar_pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run offline BLS parser and UTC regression tests
+        run: |
+          python -m unittest discover -s tests -p test_category30_official_bls_probe.py -v
+          python -m unittest discover -s tests -p test_category30_official_fomc_probe.py -v
+          python -m unittest discover -s tests -p test_category30_official_bea_probe.py -v
+          python -m unittest discover -s tests -p test_category30_historic_news_source_probe.py -v
+
+      - name: Download immutable Stage 1 Category 30 candidate signals
+        uses: actions/download-artifact@v4
+        with:
+          pattern: category30-m15-signals-*-45645175399
+          merge-multiple: true
+          path: ${{ runner.temp }}/category30-signals
+          github-token: ${{ github.token }}
+          run-id: 45645175399
+          repository: ${{ github.repository }}
+
+      - name: Collect BLS 2023-2026 archives with SHA-256 evidence
+        run: |
+          python -u -m analytics.historical_official_bls_probe \
+            --signals-dir "$RUNNER_TEMP/category30-signals" \
+            --snapshots-dir "$RUNNER_TEMP/category30-official-bls/snapshots" \
+            --output "$RUNNER_TEMP/category30-official-bls/report.json"
+
+      - name: Collect Fed FOMC press releases with verified EST/EDT times
+        run: |
+          python -u -m analytics.historical_official_fomc_probe \
+            --signals-dir "$RUNNER_TEMP/category30-signals" \
+            --snapshots-dir "$RUNNER_TEMP/category30-official-fomc/snapshots" \
+            --output "$RUNNER_TEMP/category30-official-fomc/report.json"
+
+      - name: Collect BEA GDP and PCE archive-backed release instants
+        run: |
+          python -u -m analytics.historical_official_bea_probe \
+            --signals-dir "$RUNNER_TEMP/category30-signals" \
+            --snapshots-dir "$RUNNER_TEMP/category30-official-bea/snapshots" \
+            --output "$RUNNER_TEMP/category30-official-bea/report.json"
+
+      - name: Preserve evidence, source snapshots and blockers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-official-bls-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-official-bls
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Preserve Fed FOMC source evidence and blockers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-official-fomc-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-official-fomc
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Preserve BEA release evidence and blockers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: category30-official-bea-${{ github.run_id }}
+          path: ${{ runner.temp }}/category30-official-bea
+          if-no-files-found: warn
+          retention-days: 90
