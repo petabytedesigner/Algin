@@ -20,9 +20,12 @@ Statistics' own annual release schedules (public domain).
 - `https://www.federalreserve.gov/newsevents/pressreleases/2024-press-fomc.htm`
 - `https://www.federalreserve.gov/newsevents/pressreleases/2025-press-fomc.htm`
 - `https://www.federalreserve.gov/newsevents/pressreleases/2026-press-fomc.htm`
+- `https://www.bea.gov/news/archive?field_related_product_target_id=456`
+- `https://www.bea.gov/news/archive?field_related_product_target_id=716`
 
 Official BLS reuse notice: `https://www.bls.gov/opub/copyright-information.htm`.
 Official Fed reuse notice: `https://www.federalreserve.gov/disclaimer.htm`.
+Official BEA reuse notice: `https://www.bea.gov/help/faq/147`.
 These schedules publish local U.S. Eastern times, **not UTC**. Code converts
 using the IANA `America/New_York` zone, including DST. It never invents a time.
 
@@ -48,6 +51,12 @@ third-party API key and performs no broker requests or writes.
    these public-domain snapshots and report in
    `category30-official-fomc-<run-id>` (90 days). No time is inferred solely
    from a meeting day; the actual policy statement page is required.
+8. Check bounded BEA archives for GDP and Personal Income and Outlays (PCE)
+   across 2023-2026, then download only articles whose **published dates** fall
+   within the frozen candidate windows. Cross-check each article's explicit
+   embargo release date/time, including EST/EDT, against archive metadata.
+   Preserve index and sampled raw article pages, their SHA-256 hashes and
+   source counts in `category30-official-bea-<run-id>` (90 days).
 
 After substantive verification and licensing checks for all agencies, a
 versioned normalized dataset can be committed under a future
@@ -56,13 +65,13 @@ are **not yet** accepted as the complete retained calendar dataset.
 
 ## Important limitations and blockers
 
-- BLS and FOMC are **subsets of USD economic releases**, not complete USD/EUR
+- BLS, FOMC, BEA GDP and PCE are **subsets of USD economic releases**, not complete USD/EUR
   coverage. No actual policy-rate values are inferred from the statement.
 - BLS supplies event schedules, **not Forex Factory high/medium/low ratings**.
   The watchlist field is an internal research aid, not a sourced impact label.
 - Archived schedules may reflect later revisions. They do **not** prove what
   the bot would have known on the historical decision date.
-- Add BEA GDP/PCE, ECB rates and Eurostat release schedules, then
+- Add ECB rates and Eurostat release schedules, then
   separately attest coverage, timing and source provenance.
 - Historical broker tradeability, costs and fills are still unverified.
 - No net-P&L backtest may be authorized by this pilot.
